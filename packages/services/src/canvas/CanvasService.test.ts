@@ -274,4 +274,113 @@ describe('CanvasService', () => {
       expect(content).toContain('&lt;img src=x onerror=alert(1)&gt;');
     });
   });
+
+  describe('lang propagation (#4)', () => {
+    function readCanvasFile(mindPath: string, name: string): string {
+      return fs.readFileSync(
+        path.join(mindPath, '.chamber', 'canvas', `${name}.html`),
+        'utf8',
+      );
+    }
+
+    it('defaults to <html lang="en"> when no lang is provided', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: 'default-lang',
+        open_browser: false,
+      });
+
+      const content = readCanvasFile(mindPath, 'default-lang');
+      expect(content).toMatch(/<html\s+lang="en"\s*>/);
+    });
+
+    it.each([
+      ['fr', '<html lang="fr">'],
+      ['en-US', '<html lang="en-US">'],
+      ['pt-BR', '<html lang="pt-BR">'],
+      ['zh-Hans', '<html lang="zh-Hans">'],
+    ])('propagates valid lang %s to the generated <html> tag', async (lang, expectedFragment) => {
+      const mindPath = makeMindPath();
+      const safeName = `lang-${lang.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`;
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: safeName,
+        open_browser: false,
+        lang,
+      });
+
+      const content = readCanvasFile(mindPath, safeName);
+      expect(content).toContain(expectedFragment);
+    });
+
+    it.each([
+      ['EN_US', 'underscore separator is not valid BCP-47'],
+      ['english', 'primary subtag exceeds 3 characters'],
+      ['en"><script>', 'angle brackets / quotes break out'],
+      ['en; alert(1)', 'punctuation and spaces are not valid subtag chars'],
+      ['', 'empty lang must be rejected'],
+      ['x'.repeat(50), 'overly long primary subtag must be rejected'],
+    ])('rejects invalid lang %j (%s)', async (lang) => {
+      const mindPath = makeMindPath();
+      const safeName = `invalid-${Math.random().toString(36).slice(2, 10)}`;
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: safeName,
+          open_browser: false,
+          lang,
+        }),
+      ).rejects.toThrow(/lang/i);
+    });
+
+    it('propagates valid lang on updateCanvas', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>before</h1>',
+        name: 'updatable',
+        open_browser: false,
+      });
+
+      service.updateCanvas('mind-1', mindPath, {
+        html: '<h1>after</h1>',
+        name: 'updatable',
+        lang: 'pt-BR',
+      });
+
+      const content = readCanvasFile(mindPath, 'updatable');
+      expect(content).toMatch(/<html\s+lang="pt-BR"\s*>/);
+    });
+
+    it('rejects invalid lang on updateCanvas', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: 'invalid-update',
+        open_browser: false,
+      });
+
+      expect(() =>
+        service.updateCanvas('mind-1', mindPath, {
+          html: '<h1>y</h1>',
+          name: 'invalid-update',
+          lang: 'en"><script>',
+        }),
+      ).toThrow(/lang/i);
+    });
+
+    it('does not inject lang into user-provided full HTML documents', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<!DOCTYPE html><html lang="ja"><body><h1>x</h1></body></html>',
+        name: 'user-html',
+        open_browser: false,
+        lang: 'pt-BR',
+      });
+
+      const content = readCanvasFile(mindPath, 'user-html');
+      expect(content).toContain('<html lang="ja">');
+      expect(content).not.toContain('<html lang="pt-BR">');
+    });
+  });
 });
