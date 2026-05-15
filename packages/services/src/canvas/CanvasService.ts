@@ -8,6 +8,7 @@ const log = Logger.create('canvas');
 import type { Tool } from '../mind/types';
 import type { ExternalOpener } from '../ports';
 import { CanvasServer } from './CanvasServer';
+import { isPathInside } from './canvasPaths';
 import { buildCanvasTools } from './tools';
 import type {
   CanvasAction,
@@ -53,17 +54,6 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function normalizePath(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-function isPathInside(parent: string, child: string): boolean {
-  const normalizedParent = normalizePath(parent);
-  const normalizedChild = normalizePath(child);
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
 }
 
 interface WrapHtmlOptions {

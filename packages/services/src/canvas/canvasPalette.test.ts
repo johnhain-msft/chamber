@@ -1,21 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { contrastRatio } from '../sullivan/contrast';
+import { contrastRatio, passesAA } from '../sullivan/contrast';
 import {
   CANVAS_AA_PAIRS,
   CANVAS_PALETTE_DARK,
   CANVAS_PALETTE_LIGHT,
-  minRatioFor,
 } from './canvasPalette';
 import type { CanvasPalette } from './canvasPalette';
 
 /**
  * Sullivan-as-spec: every visible foreground/background adjacency in the
- * canvas palette must satisfy WCAG 2.1 contrast for its kind. This test is
- * the regression detector — phase 0.5 ships with placeholder palettes that
- * FAIL by design; phase 2 fills in real hex and the assertions flip GREEN.
+ * canvas palette must satisfy WCAG 2.1 contrast for its kind. The threshold
+ * decision is delegated to Sullivan's `passesAA`, which is the same function
+ * Sullivan's `presentation_contrast_check` tool uses, so canvas a11y and
+ * Sullivan's pedagogy rubric can never diverge on what counts as "passing".
  *
- * The contrast math lives in `packages/services/src/sullivan/contrast.ts`
- * and is the same math Sullivan's `presentation_contrast_check` tool uses.
+ * `largeText: true` covers both the WCAG large-text bucket (3:1) and the
+ * non-text-UI bucket (1.4.11, also 3:1). Only normal-weight body text needs
+ * the stricter 4.5:1 threshold.
  */
 function describePalette(palette: CanvasPalette, paletteName: string): void {
   describe(`${paletteName} palette WCAG 2.1 contrast`, () => {
@@ -24,8 +25,8 @@ function describePalette(palette: CanvasPalette, paletteName: string): void {
         const fg = palette[pair.fg];
         const bg = palette[pair.bg];
         const ratio = contrastRatio(fg, bg);
-        const minimum = minRatioFor(pair.kind);
-        expect(ratio).toBeGreaterThanOrEqual(minimum);
+        const largeOrNonText = pair.kind !== 'text';
+        expect(passesAA(ratio, largeOrNonText)).toBe(true);
       });
     }
   });

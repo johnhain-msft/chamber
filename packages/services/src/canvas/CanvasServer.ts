@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
 import { CANVAS_PALETTE_DARK, CANVAS_PALETTE_LIGHT } from './canvasPalette';
+import { isPathInside } from './canvasPaths';
 import type { CanvasAction, CanvasServerLike } from './types';
 
 const MIME_TYPES: Record<string, string> = {
@@ -317,17 +318,6 @@ function injectBridge(html: string, filename: string): string {
   const withSkip = injectSkipLink(withMain, mainId);
   const withToggle = injectViewToggle(withSkip);
   return injectScript(withToggle, bridgeScript);
-}
-
-function normalizePath(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-function isPathInside(parent: string, child: string): boolean {
-  const normalizedParent = normalizePath(parent);
-  const normalizedChild = normalizePath(child);
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
 }
 
 function readRequestBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {

@@ -1,23 +1,17 @@
 /**
  * Canvas palette — data-only module.
  *
- * Why this exists: chamber's canvas service injects a CSS palette into every
- * rendered canvas via `CHAMBER_CANVAS_STYLE` in `CanvasServer.ts`. WCAG 2.1
- * compliance demands every visible foreground/background pair satisfy a
- * minimum contrast ratio (4.5:1 normal text, 3.0:1 large text and non-text
- * UI). Treating those values as opaque CSS strings means a typo or palette
- * tweak can silently regress a11y. Instead, the palette lives here as typed
- * hex constants, and `canvasPalette.test.ts` iterates `CANVAS_AA_PAIRS` to
- * assert every adjacency clears the threshold using Sullivan's pure
- * `contrastRatio` math (from `packages/services/src/sullivan/contrast.ts`).
+ * Why this lives here, not inline in `CHAMBER_CANVAS_STYLE`: Sullivan's
+ * WCAG contrast math (`packages/services/src/sullivan/contrast.ts`) operates
+ * on typed hex strings, not opaque CSS. Treating palette tokens as opaque
+ * strings means a typo or theme tweak silently regresses a11y. Keeping the
+ * tokens here as typed constants — and iterating `CANVAS_AA_PAIRS` in
+ * `canvasPalette.test.ts` through Sullivan's `passesAA` — means every
+ * adjacency the rendered canvas can produce is validated against the same
+ * threshold Sullivan's `presentation_contrast_check` tool enforces.
  *
- * **Phase 0.5 (this commit's working-tree state):** placeholders below are
- * intentionally failing — every token is `#000000`, so contrast is 1:1.
- * This is the regression-detector baseline. Phase 2 fills in real
- * AA-compliant hex values; the test then flips to GREEN.
- *
- * No theming system here — this is the canvas surface only, and the constants
- * exist solely so Sullivan's tools can validate them.
+ * Threshold knowledge lives in Sullivan, not here. This module owns the
+ * palette and the surface inventory; Sullivan owns "passes AA?".
  */
 
 export interface CanvasPalette {
@@ -35,23 +29,6 @@ export interface CanvasPalette {
   readonly skipLinkFg: string;
   readonly focusRing: string;
 }
-
-const PLACEHOLDER: CanvasPalette = {
-  background: '#000000',
-  foreground: '#000000',
-  card: '#000000',
-  border: '#000000',
-  muted: '#000000',
-  mutedForeground: '#000000',
-  accent: '#000000',
-  genesis: '#000000',
-  link: '#000000',
-  linkVisited: '#000000',
-  skipLinkBg: '#000000',
-  skipLinkFg: '#000000',
-  focusRing: '#000000',
-};
-void PLACEHOLDER;
 
 /**
  * Dark palette — WCAG 2.1 AA compliant for every pair in `CANVAS_AA_PAIRS`.
@@ -180,13 +157,3 @@ export const CANVAS_AA_PAIRS: readonly CanvasAaPair[] = [
   { name: 'focus-ring-on-muted', fg: 'focusRing', bg: 'muted', kind: 'non-text' },
   { name: 'focus-ring-on-button-primary', fg: 'focusRing', bg: 'foreground', kind: 'non-text' },
 ] as const;
-
-export const AA_TEXT_MIN_RATIO = 4.5;
-export const AA_LARGE_TEXT_MIN_RATIO = 3.0;
-export const NON_TEXT_MIN_RATIO = 3.0;
-
-export function minRatioFor(kind: ContrastKind): number {
-  if (kind === 'text') return AA_TEXT_MIN_RATIO;
-  if (kind === 'large-text') return AA_LARGE_TEXT_MIN_RATIO;
-  return NON_TEXT_MIN_RATIO;
-}
