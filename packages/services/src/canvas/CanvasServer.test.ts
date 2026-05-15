@@ -214,4 +214,104 @@ describe('CanvasServer', () => {
       );
     });
   });
+
+  describe('injectBridge a11y affordances (#4)', () => {
+    async function fetchInjectedHtml(
+      bodyHtml: string,
+      opts?: { headHtml?: string },
+    ): Promise<string> {
+      const mindId = 'bridge-mind';
+      const mindDir = makeMindDir(mindId);
+      mindDirs.set(mindId, mindDir);
+      const filename = 'report.html';
+      tokens.set(`${mindId}:${filename}`, 'bridge-token');
+      fs.writeFileSync(
+        path.join(mindDir, filename),
+        `<!DOCTYPE html><html><head>${opts?.headHtml ?? ''}</head><body>${bodyHtml}</body></html>`,
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${mindId}/${filename}?token=bridge-token`,
+      );
+      return response.text();
+    }
+
+    function countMatches(html: string, pattern: RegExp): number {
+      const matches = html.match(pattern);
+      return matches ? matches.length : 0;
+    }
+
+    it('wraps body content in <main id="ch-main"> when no <main> element exists', async () => {
+      const html = await fetchInjectedHtml('<h1>Title</h1><p>Body</p>');
+      expect(html).toMatch(
+        /<main\s+id=["']ch-main["'][^>]*>[\s\S]*<h1>Title<\/h1>[\s\S]*<p>Body<\/p>[\s\S]*<\/main>/,
+      );
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+    });
+
+    it('reuses an existing <main id="ch-main"> instead of double-wrapping', async () => {
+      const html = await fetchInjectedHtml('<main id="ch-main"><h1>Existing</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(countMatches(html, /<main\b[^>]*\bid=["']ch-main["']/g)).toBe(1);
+    });
+
+    it('adds id="ch-main" to an existing <main> element that has no id', async () => {
+      const html = await fetchInjectedHtml('<main><h1>Unlabeled</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(html).toMatch(
+        /<main\b[^>]*\bid=["']ch-main["'][^>]*>[\s\S]*<h1>Unlabeled<\/h1>[\s\S]*<\/main>/,
+      );
+    });
+
+    it('points the skip-link at the existing <main> id when it differs from ch-main', async () => {
+      const html = await fetchInjectedHtml('<main id="primary"><h1>Custom</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(html).toMatch(
+        /<a[^>]*\bclass=["'][^"']*\bch-skip-link\b[^"']*["'][^>]*\bhref=["']#primary["']/,
+      );
+    });
+
+    it('prepends the .ch-skip-link as the first child of <body> pointing to #ch-main', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      expect(html).toMatch(
+        /<body[^>]*>\s*<a[^>]*\bclass=["'][^"']*\bch-skip-link\b[^"']*["'][^>]*\bhref=["']#ch-main["']/,
+      );
+    });
+
+    it('renders a view-toggle button with aria-pressed="false" and data-action="ch-view-toggle"', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      const buttonMatch = html.match(
+        /<button\b[^>]*\bclass=["'][^"']*\bch-view-toggle\b[^"']*["'][^>]*>/,
+      );
+      expect(buttonMatch).not.toBeNull();
+      const button = buttonMatch?.[0] ?? '';
+      expect(button).toMatch(/\baria-pressed=["']false["']/);
+      expect(button).toMatch(/\bdata-action=["']ch-view-toggle["']/);
+      expect(button).not.toMatch(/\bon[a-z]+=/i);
+    });
+
+    it('uses addEventListener to wire the view-toggle to body.dataset.chView without inline handlers', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      const scripts = html.match(/<script\b[\s\S]*?<\/script>/g) ?? [];
+      const bridge = scripts.find((s) => s.includes("EventSource('_sse")) ?? '';
+      expect(bridge).not.toBe('');
+      expect(bridge).toMatch(/addEventListener\(\s*['"]click['"]/);
+      expect(bridge).toContain('document.body.dataset.chView');
+      expect(bridge).toMatch(/['"]linear['"]/);
+    });
+
+    it('does not duplicate chamber markup when the user HTML already contains skip-link, view-toggle, and <main id="ch-main">', async () => {
+      const html = await fetchInjectedHtml(
+        [
+          '<a class="ch-skip-link" href="#ch-main">Skip to main content</a>',
+          '<button class="ch-view-toggle" aria-pressed="false" data-action="ch-view-toggle">Linear</button>',
+          '<main id="ch-main"><h1>X</h1></main>',
+        ].join(''),
+      );
+      expect(countMatches(html, /<a[^>]*\bclass=["'][^"']*\bch-skip-link\b/g)).toBe(1);
+      expect(countMatches(html, /<button[^>]*\bclass=["'][^"']*\bch-view-toggle\b/g)).toBe(1);
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+    });
+  });
 });

@@ -181,27 +181,135 @@ function buildBridgeScript(filename: string): string {
       });
     }
   };
+
+  function wireViewToggle() {
+    var btn = document.querySelector('button.ch-view-toggle');
+    if (!btn || btn.dataset.chWired === '1') { return; }
+    btn.dataset.chWired = '1';
+    btn.addEventListener('click', function() {
+      var nextLinear = document.body.dataset.chView !== 'linear';
+      if (nextLinear) {
+        document.body.dataset.chView = 'linear';
+        btn.setAttribute('aria-pressed', 'true');
+      } else {
+        delete document.body.dataset.chView;
+        btn.setAttribute('aria-pressed', 'false');
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireViewToggle);
+  } else {
+    wireViewToggle();
+  }
 })();
 </script>`;
 }
 
-function injectBridge(html: string, filename: string): string {
-  const bridgeScript = buildBridgeScript(filename);
-  const additions = `${CHAMBER_CANVAS_STYLE}\n${bridgeScript}`;
-  if (html.includes('</head>')) {
-    const withStyle = html.replace('</head>', `${CHAMBER_CANVAS_STYLE}\n</head>`);
-    if (withStyle.includes('</body>')) {
-      return withStyle.replace('</body>', `${bridgeScript}\n</body>`);
-    }
-    return `${withStyle}${bridgeScript}`;
+function escapeReplacement(value: string): string {
+  return value.replace(/\$/g, '$$$$');
+}
+
+function findBodyOpen(html: string): { match: string; start: number; end: number } | null {
+  const match = html.match(/<body\b[^>]*>/i);
+  if (!match || match.index === undefined) {
+    return null;
   }
+  return { match: match[0], start: match.index, end: match.index + match[0].length };
+}
+
+function injectStyle(html: string): string {
+  if (html.includes('</head>')) {
+    return html.replace('</head>', `${escapeReplacement(CHAMBER_CANVAS_STYLE)}\n</head>`);
+  }
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.start)}<head>${CHAMBER_CANVAS_STYLE}</head>${html.slice(bodyOpen.start)}`;
+  }
+  return `${CHAMBER_CANVAS_STYLE}${html}`;
+}
+
+function resolveMainElement(html: string): { html: string; mainId: string } {
+  const mainOpenMatch = html.match(/<main\b([^>]*)>/i);
+  if (mainOpenMatch) {
+    const attrs = mainOpenMatch[1] ?? '';
+    const idMatch = attrs.match(/\bid\s*=\s*["']([^"']+)["']/);
+    if (idMatch && idMatch[1]) {
+      return { html, mainId: idMatch[1] };
+    }
+    const replacement = `<main${attrs} id="ch-main">`;
+    return {
+      html: html.replace(mainOpenMatch[0], escapeReplacement(replacement)),
+      mainId: 'ch-main',
+    };
+  }
+
+  const bodyOpen = findBodyOpen(html);
+  const bodyCloseMatch = html.match(/<\/body\s*>/i);
+  if (bodyOpen && bodyCloseMatch && bodyCloseMatch.index !== undefined) {
+    const before = html.slice(0, bodyOpen.end);
+    const body = html.slice(bodyOpen.end, bodyCloseMatch.index);
+    const after = html.slice(bodyCloseMatch.index);
+    return {
+      html: `${before}<main id="ch-main">${body}</main>${after}`,
+      mainId: 'ch-main',
+    };
+  }
+
+  return {
+    html: `${html}<main id="ch-main"></main>`,
+    mainId: 'ch-main',
+  };
+}
+
+function injectSkipLink(html: string, mainId: string): string {
+  if (/<a\b[^>]*\bclass\s*=\s*["'][^"']*\bch-skip-link\b/i.test(html)) {
+    return html;
+  }
+  const safeMainId = mainId.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const skipLink = `<a class="ch-skip-link" href="#${safeMainId}">Skip to main content</a>`;
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.end)}${skipLink}${html.slice(bodyOpen.end)}`;
+  }
+  return `${skipLink}${html}`;
+}
+
+function injectViewToggle(html: string): string {
+  if (/<button\b[^>]*\bclass\s*=\s*["'][^"']*\bch-view-toggle\b/i.test(html)) {
+    return html;
+  }
+  const button = `<button type="button" class="ch-view-toggle" aria-pressed="false" data-action="ch-view-toggle">Linear view</button>`;
+  const skipLinkMatch = html.match(/<a\b[^>]*\bclass\s*=\s*["'][^"']*\bch-skip-link\b[^"']*["'][^>]*>[\s\S]*?<\/a>/i);
+  if (skipLinkMatch && skipLinkMatch.index !== undefined) {
+    const insertAt = skipLinkMatch.index + skipLinkMatch[0].length;
+    return `${html.slice(0, insertAt)}${button}${html.slice(insertAt)}`;
+  }
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.end)}${button}${html.slice(bodyOpen.end)}`;
+  }
+  return `${button}${html}`;
+}
+
+function injectScript(html: string, bridgeScript: string): string {
   if (html.includes('</body>')) {
-    return html.replace('</body>', `${additions}\n</body>`);
+    return html.replace('</body>', `${escapeReplacement(bridgeScript)}\n</body>`);
   }
   if (html.includes('</html>')) {
-    return html.replace('</html>', `${additions}\n</html>`);
+    return html.replace('</html>', `${escapeReplacement(bridgeScript)}\n</html>`);
   }
-  return `${html}${additions}`;
+  return `${html}${bridgeScript}`;
+}
+
+function injectBridge(html: string, filename: string): string {
+  const bridgeScript = buildBridgeScript(filename);
+  const styled = injectStyle(html);
+  const { html: withMain, mainId } = resolveMainElement(styled);
+  const withSkip = injectSkipLink(withMain, mainId);
+  const withToggle = injectViewToggle(withSkip);
+  return injectScript(withToggle, bridgeScript);
 }
 
 function normalizePath(value: string): string {
