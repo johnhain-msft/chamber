@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
+import { CANVAS_PALETTE_DARK, CANVAS_PALETTE_LIGHT } from './canvasPalette';
 import type { CanvasAction, CanvasServerLike } from './types';
 
 const MIME_TYPES: Record<string, string> = {
@@ -27,18 +28,40 @@ type CanvasClient = ServerResponse<IncomingMessage>;
 const CHAMBER_CANVAS_STYLE = `
 <style>
 :root {
-  color-scheme: dark;
-  --ch-background: oklch(0.145 0.008 260);
-  --ch-foreground: oklch(0.985 0 0);
-  --ch-card: oklch(0.195 0.015 260);
-  --ch-border: oklch(0.25 0.012 260);
-  --ch-muted: oklch(0.255 0.015 260);
-  --ch-muted-foreground: oklch(0.708 0.01 260);
-  --ch-accent: oklch(0.255 0.015 260);
-  --ch-genesis: oklch(0.72 0.15 160);
+  color-scheme: light dark;
+  --ch-background: ${CANVAS_PALETTE_DARK.background};
+  --ch-foreground: ${CANVAS_PALETTE_DARK.foreground};
+  --ch-card: ${CANVAS_PALETTE_DARK.card};
+  --ch-border: ${CANVAS_PALETTE_DARK.border};
+  --ch-muted: ${CANVAS_PALETTE_DARK.muted};
+  --ch-muted-foreground: ${CANVAS_PALETTE_DARK.mutedForeground};
+  --ch-accent: ${CANVAS_PALETTE_DARK.accent};
+  --ch-genesis: ${CANVAS_PALETTE_DARK.genesis};
+  --ch-link: ${CANVAS_PALETTE_DARK.link};
+  --ch-link-visited: ${CANVAS_PALETTE_DARK.linkVisited};
+  --ch-skip-link-bg: ${CANVAS_PALETTE_DARK.skipLinkBg};
+  --ch-skip-link-fg: ${CANVAS_PALETTE_DARK.skipLinkFg};
+  --ch-focus-ring: ${CANVAS_PALETTE_DARK.focusRing};
   --ch-radius: 0.75rem;
   --ch-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --ch-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --ch-background: ${CANVAS_PALETTE_LIGHT.background};
+    --ch-foreground: ${CANVAS_PALETTE_LIGHT.foreground};
+    --ch-card: ${CANVAS_PALETTE_LIGHT.card};
+    --ch-border: ${CANVAS_PALETTE_LIGHT.border};
+    --ch-muted: ${CANVAS_PALETTE_LIGHT.muted};
+    --ch-muted-foreground: ${CANVAS_PALETTE_LIGHT.mutedForeground};
+    --ch-accent: ${CANVAS_PALETTE_LIGHT.accent};
+    --ch-genesis: ${CANVAS_PALETTE_LIGHT.genesis};
+    --ch-link: ${CANVAS_PALETTE_LIGHT.link};
+    --ch-link-visited: ${CANVAS_PALETTE_LIGHT.linkVisited};
+    --ch-skip-link-bg: ${CANVAS_PALETTE_LIGHT.skipLinkBg};
+    --ch-skip-link-fg: ${CANVAS_PALETTE_LIGHT.skipLinkFg};
+    --ch-focus-ring: ${CANVAS_PALETTE_LIGHT.focusRing};
+  }
 }
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
@@ -48,6 +71,7 @@ body {
   color: var(--ch-foreground);
   font-family: var(--ch-font-sans);
 }
+body[data-ch-view="linear"] { scroll-behavior: auto; }
 .ch-page { min-height: 100vh; padding: 1.5rem; background: var(--ch-background); color: var(--ch-foreground); }
 .ch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
 .ch-card { border: 1px solid var(--ch-border); border-radius: var(--ch-radius); background: var(--ch-card); padding: 1rem; }
@@ -70,9 +94,70 @@ body {
   font: inherit;
   padding: 0.5rem 0.75rem;
 }
+.ch-input::placeholder { color: var(--ch-muted-foreground); }
 .ch-table { width: 100%; border-collapse: collapse; }
 .ch-table th, .ch-table td { border-bottom: 1px solid var(--ch-border); padding: 0.625rem; text-align: left; }
+.ch-table th { color: var(--ch-muted-foreground); }
 .ch-badge { border: 1px solid var(--ch-border); border-radius: 999px; display: inline-flex; padding: 0.125rem 0.5rem; color: var(--ch-muted-foreground); }
+a { color: var(--ch-link); }
+a:visited { color: var(--ch-link-visited); }
+:focus-visible {
+  outline: 2px solid var(--ch-focus-ring);
+  outline-offset: 2px;
+}
+.ch-skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--ch-skip-link-bg);
+  color: var(--ch-skip-link-fg);
+  border: 2px solid var(--ch-focus-ring);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  font: inherit;
+  transform: translateY(-200%);
+  transition: transform 150ms ease;
+  z-index: 1000;
+}
+.ch-skip-link:focus,
+.ch-skip-link:focus-visible {
+  transform: translateY(0);
+}
+.ch-view-toggle {
+  background: var(--ch-muted);
+  color: var(--ch-foreground);
+  border: 1px solid var(--ch-border);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  font: inherit;
+  cursor: pointer;
+}
+.ch-view-toggle[aria-pressed="true"] {
+  background: var(--ch-foreground);
+  color: var(--ch-background);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  body { background: Canvas; color: CanvasText; }
+  .ch-card { background: Canvas; border-color: CanvasText; }
+  .ch-button { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-button-secondary { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-input { background: Field; color: FieldText; border: 1px solid FieldText; }
+  .ch-skip-link { background: ButtonFace; color: ButtonText; border-color: Highlight; }
+  .ch-view-toggle { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-view-toggle[aria-pressed="true"] { background: Highlight; color: HighlightText; }
+  .ch-badge { background: Canvas; color: CanvasText; border-color: CanvasText; }
+  a { color: LinkText; }
+  a:visited { color: VisitedText; }
+  :focus-visible { outline-color: Highlight; }
+}
 </style>`;
 
 function buildBridgeScript(filename: string): string {

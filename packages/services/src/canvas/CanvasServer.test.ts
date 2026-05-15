@@ -156,4 +156,62 @@ describe('CanvasServer', () => {
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Forbidden');
   });
+
+  describe('CHAMBER_CANVAS_STYLE a11y baseline (#4)', () => {
+    async function fetchServedHtml(): Promise<string> {
+      const mindDir = makeMindDir('a11y-mind');
+      mindDirs.set('a11y-mind', mindDir);
+      tokens.set('a11y-mind:report.html', 'a11y-token');
+      fs.writeFileSync(
+        path.join(mindDir, 'report.html'),
+        '<!DOCTYPE html><html><head></head><body><h1>Hi</h1></body></html>',
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/a11y-mind/report.html?token=a11y-token`,
+      );
+      return response.text();
+    }
+
+    it('declares color-scheme: light dark so the canvas honors the OS theme', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/color-scheme:\s*light dark/);
+    });
+
+    it('emits :focus-visible rules so keyboard focus is always perceivable', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toContain(':focus-visible');
+    });
+
+    it('collapses transitions and animations under prefers-reduced-motion', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+      expect(html).toMatch(
+        /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
+      );
+    });
+
+    it('uses CSS system colors inside a forced-colors media block', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/@media\s*\(forced-colors:\s*active\)/);
+      expect(html).toMatch(/background:\s*Canvas\b/);
+      expect(html).toMatch(/color:\s*CanvasText\b/);
+      expect(html).toMatch(/background:\s*ButtonFace\b/);
+      expect(html).toMatch(/color:\s*ButtonText\b/);
+      expect(html).toMatch(/outline-color:\s*Highlight\b/);
+    });
+
+    it('defines a .ch-skip-link rule so the bridge can style the skip target', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/\.ch-skip-link\s*\{/);
+    });
+
+    it('declares the body[data-ch-view="linear"] scroll-behavior hook for the presentation engine in #5', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(
+        /body\[data-ch-view="linear"\]\s*\{[\s\S]*?scroll-behavior:\s*auto/,
+      );
+    });
+  });
 });
