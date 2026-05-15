@@ -87,7 +87,7 @@ function wrapHtml(name: string, html: string, opts: WrapHtmlOptions = {}): strin
   <title>${escapeHtml(pageTitle)}</title>
 </head>
 <body>
-<main id="ch-main">
+<main id="ch-main" tabindex="-1">
 ${html}
 </main>
 </body>

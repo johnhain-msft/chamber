@@ -71,7 +71,7 @@ body {
   color: var(--ch-foreground);
   font-family: var(--ch-font-sans);
 }
-body[data-ch-view="linear"] { scroll-behavior: auto; }
+:root[data-ch-view="linear"] { scroll-behavior: auto; }
 .ch-page { min-height: 100vh; padding: 1.5rem; background: var(--ch-background); color: var(--ch-foreground); }
 .ch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
 .ch-card { border: 1px solid var(--ch-border); border-radius: var(--ch-radius); background: var(--ch-card); padding: 1rem; }
@@ -187,12 +187,12 @@ function buildBridgeScript(filename: string): string {
     if (!btn || btn.dataset.chWired === '1') { return; }
     btn.dataset.chWired = '1';
     btn.addEventListener('click', function() {
-      var nextLinear = document.body.dataset.chView !== 'linear';
+      var nextLinear = document.documentElement.dataset.chView !== 'linear';
       if (nextLinear) {
-        document.body.dataset.chView = 'linear';
+        document.documentElement.dataset.chView = 'linear';
         btn.setAttribute('aria-pressed', 'true');
       } else {
-        delete document.body.dataset.chView;
+        delete document.documentElement.dataset.chView;
         btn.setAttribute('aria-pressed', 'false');
       }
     });
@@ -220,8 +220,10 @@ function findBodyOpen(html: string): { match: string; start: number; end: number
 }
 
 function injectStyle(html: string): string {
-  if (html.includes('</head>')) {
-    return html.replace('</head>', `${escapeReplacement(CHAMBER_CANVAS_STYLE)}\n</head>`);
+  const headCloseMatch = html.match(/<\/head\s*>/i);
+  if (headCloseMatch && headCloseMatch.index !== undefined) {
+    const idx = headCloseMatch.index;
+    return `${html.slice(0, idx)}${CHAMBER_CANVAS_STYLE}\n${html.slice(idx)}`;
   }
   const bodyOpen = findBodyOpen(html);
   if (bodyOpen) {
@@ -238,7 +240,8 @@ function resolveMainElement(html: string): { html: string; mainId: string } {
     if (idMatch && idMatch[1]) {
       return { html, mainId: idMatch[1] };
     }
-    const replacement = `<main${attrs} id="ch-main">`;
+    const tabindexSuffix = /\btabindex\s*=/i.test(attrs) ? '' : ' tabindex="-1"';
+    const replacement = `<main${attrs} id="ch-main"${tabindexSuffix}>`;
     return {
       html: html.replace(mainOpenMatch[0], escapeReplacement(replacement)),
       mainId: 'ch-main',
@@ -252,13 +255,13 @@ function resolveMainElement(html: string): { html: string; mainId: string } {
     const body = html.slice(bodyOpen.end, bodyCloseMatch.index);
     const after = html.slice(bodyCloseMatch.index);
     return {
-      html: `${before}<main id="ch-main">${body}</main>${after}`,
+      html: `${before}<main id="ch-main" tabindex="-1">${body}</main>${after}`,
       mainId: 'ch-main',
     };
   }
 
   return {
-    html: `${html}<main id="ch-main"></main>`,
+    html: `${html}<main id="ch-main" tabindex="-1"></main>`,
     mainId: 'ch-main',
   };
 }
@@ -294,11 +297,15 @@ function injectViewToggle(html: string): string {
 }
 
 function injectScript(html: string, bridgeScript: string): string {
-  if (html.includes('</body>')) {
-    return html.replace('</body>', `${escapeReplacement(bridgeScript)}\n</body>`);
+  const bodyCloseMatch = html.match(/<\/body\s*>/i);
+  if (bodyCloseMatch && bodyCloseMatch.index !== undefined) {
+    const idx = bodyCloseMatch.index;
+    return `${html.slice(0, idx)}${bridgeScript}\n${html.slice(idx)}`;
   }
-  if (html.includes('</html>')) {
-    return html.replace('</html>', `${escapeReplacement(bridgeScript)}\n</html>`);
+  const htmlCloseMatch = html.match(/<\/html\s*>/i);
+  if (htmlCloseMatch && htmlCloseMatch.index !== undefined) {
+    const idx = htmlCloseMatch.index;
+    return `${html.slice(0, idx)}${bridgeScript}\n${html.slice(idx)}`;
   }
   return `${html}${bridgeScript}`;
 }

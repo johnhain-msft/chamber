@@ -223,7 +223,7 @@ describe('CanvasService', () => {
       );
     }
 
-    it('wraps fragment HTML in <main id="ch-main"> so the skip link has a target', async () => {
+    it('wraps fragment HTML in <main id="ch-main" tabindex="-1"> so the skip link has a target', async () => {
       const mindPath = makeMindPath();
 
       await service.showCanvas('mind-1', mindPath, {
@@ -234,7 +234,7 @@ describe('CanvasService', () => {
 
       const content = readCanvasFile(mindPath, 'lesson');
       expect(content).toMatch(
-        /<main\s+id="ch-main"[^>]*>[\s\S]*?<h1>Lesson<\/h1>[\s\S]*?<\/main>/,
+        /<main\s+id="ch-main"\s+tabindex="-1"[^>]*>[\s\S]*?<h1>Lesson<\/h1>[\s\S]*?<\/main>/,
       );
     });
 

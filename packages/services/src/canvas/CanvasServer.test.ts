@@ -207,11 +207,37 @@ describe('CanvasServer', () => {
       expect(html).toMatch(/\.ch-skip-link\s*\{/);
     });
 
-    it('declares the body[data-ch-view="linear"] scroll-behavior hook for the presentation engine in #5', async () => {
+    it('declares the :root[data-ch-view="linear"] scroll-behavior hook for the presentation engine in #5', async () => {
       const html = await fetchServedHtml();
       expect(html).toMatch(
-        /body\[data-ch-view="linear"\]\s*\{[\s\S]*?scroll-behavior:\s*auto/,
+        /:root\[data-ch-view="linear"\]\s*\{[\s\S]*?scroll-behavior:\s*auto/,
       );
+    });
+
+    it('injects style + skip-link + bridge script even when </HEAD>/</BODY> are uppercase', async () => {
+      const mindDir = makeMindDir('a11y-mixedcase');
+      mindDirs.set('a11y-mixedcase', mindDir);
+      tokens.set('a11y-mixedcase:upper.html', 'a11y-token');
+      fs.writeFileSync(
+        path.join(mindDir, 'upper.html'),
+        '<!DOCTYPE HTML><HTML><HEAD></HEAD><BODY><H1>Hi</H1></BODY></HTML>',
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/a11y-mixedcase/upper.html?token=a11y-token`,
+      );
+      const html = await response.text();
+
+      expect(html).toContain('--ch-background');
+      expect(html).toMatch(/<a[^>]*\bclass=["'][^"']*\bch-skip-link\b/i);
+      expect(html).toMatch(/<main\b[^>]*\bid=["']ch-main["']/i);
+      expect(html).toContain("EventSource('_sse?canvas=");
+      const scriptIdx = html.indexOf("EventSource('_sse?canvas=");
+      const closeBodyIdx = html.search(/<\/body\s*>/i);
+      expect(scriptIdx).toBeGreaterThan(-1);
+      expect(closeBodyIdx).toBeGreaterThan(-1);
+      expect(scriptIdx).toBeLessThan(closeBodyIdx);
     });
   });
 
@@ -242,10 +268,10 @@ describe('CanvasServer', () => {
       return matches ? matches.length : 0;
     }
 
-    it('wraps body content in <main id="ch-main"> when no <main> element exists', async () => {
+    it('wraps body content in <main id="ch-main" tabindex="-1"> when no <main> element exists', async () => {
       const html = await fetchInjectedHtml('<h1>Title</h1><p>Body</p>');
       expect(html).toMatch(
-        /<main\s+id=["']ch-main["'][^>]*>[\s\S]*<h1>Title<\/h1>[\s\S]*<p>Body<\/p>[\s\S]*<\/main>/,
+        /<main\s+id=["']ch-main["']\s+tabindex=["']-1["']\s*>[\s\S]*<h1>Title<\/h1>[\s\S]*<p>Body<\/p>[\s\S]*<\/main>/,
       );
       expect(countMatches(html, /<main\b/g)).toBe(1);
     });
@@ -256,11 +282,11 @@ describe('CanvasServer', () => {
       expect(countMatches(html, /<main\b[^>]*\bid=["']ch-main["']/g)).toBe(1);
     });
 
-    it('adds id="ch-main" to an existing <main> element that has no id', async () => {
+    it('adds id="ch-main" and tabindex="-1" to an existing <main> element that has no id', async () => {
       const html = await fetchInjectedHtml('<main><h1>Unlabeled</h1></main>');
       expect(countMatches(html, /<main\b/g)).toBe(1);
       expect(html).toMatch(
-        /<main\b[^>]*\bid=["']ch-main["'][^>]*>[\s\S]*<h1>Unlabeled<\/h1>[\s\S]*<\/main>/,
+        /<main\b[^>]*\bid=["']ch-main["'][^>]*\btabindex=["']-1["'][^>]*>[\s\S]*<h1>Unlabeled<\/h1>[\s\S]*<\/main>/,
       );
     });
 
@@ -291,13 +317,14 @@ describe('CanvasServer', () => {
       expect(button).not.toMatch(/\bon[a-z]+=/i);
     });
 
-    it('uses addEventListener to wire the view-toggle to body.dataset.chView without inline handlers', async () => {
+    it('uses addEventListener to wire the view-toggle to documentElement.dataset.chView without inline handlers', async () => {
       const html = await fetchInjectedHtml('<h1>Body</h1>');
       const scripts = html.match(/<script\b[\s\S]*?<\/script>/g) ?? [];
       const bridge = scripts.find((s) => s.includes("EventSource('_sse")) ?? '';
       expect(bridge).not.toBe('');
       expect(bridge).toMatch(/addEventListener\(\s*['"]click['"]/);
-      expect(bridge).toContain('document.body.dataset.chView');
+      expect(bridge).toContain('document.documentElement.dataset.chView');
+      expect(bridge).not.toContain('document.body.dataset.chView');
       expect(bridge).toMatch(/['"]linear['"]/);
     });
 

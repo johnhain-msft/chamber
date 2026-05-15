@@ -35,7 +35,7 @@ test.beforeAll(async () => {
   <title>Canvas A11y Smoke</title>
 </head>
 <body>
-<main id="ch-main">
+<main id="ch-main" tabindex="-1">
 <h1>Canvas A11y Smoke</h1>
 <p>This page exercises the canvas server bridge and a11y baseline output.</p>
 <p>Visit the <a href="https://example.com">example link</a> for more information.</p>
@@ -86,20 +86,20 @@ test.describe('canvas a11y baseline (#4)', () => {
     });
   }
 
-  test('view-toggle flips body[data-ch-view] and aria-pressed on click', async ({ page }) => {
+  test('view-toggle flips :root data-ch-view and aria-pressed on click', async ({ page }) => {
     await page.goto(canvasUrl());
     const toggle = page.locator('button.ch-view-toggle');
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    const body = page.locator('body');
-    await expect(body).not.toHaveAttribute('data-ch-view', /.+/);
+    const root = page.locator('html');
+    await expect(root).not.toHaveAttribute('data-ch-view', /.+/);
 
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-    await expect(body).toHaveAttribute('data-ch-view', 'linear');
+    await expect(root).toHaveAttribute('data-ch-view', 'linear');
 
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-    await expect(body).not.toHaveAttribute('data-ch-view', /.+/);
+    await expect(root).not.toHaveAttribute('data-ch-view', /.+/);
   });
 
   test('skip-link points at the main landmark', async ({ page }) => {
@@ -107,5 +107,31 @@ test.describe('canvas a11y baseline (#4)', () => {
     const skipLink = page.locator('a.ch-skip-link');
     await expect(skipLink).toHaveAttribute('href', '#ch-main');
     await expect(page.locator('main#ch-main')).toBeAttached();
+  });
+
+  test('Tab focuses the skip-link, Enter moves focus to <main id="ch-main">', async ({ page }) => {
+    await page.goto(canvasUrl());
+    await expect(page.locator('main#ch-main')).toHaveAttribute('tabindex', '-1');
+
+    await page.locator('body').click({ position: { x: 1, y: 1 } });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+
+    await page.keyboard.press('Tab');
+
+    const firstFocus = await page.evaluate(() => ({
+      tag: document.activeElement?.tagName ?? null,
+      cls: (document.activeElement as HTMLElement | null)?.className ?? null,
+    }));
+    expect(firstFocus.tag).toBe('A');
+    expect(firstFocus.cls).toContain('ch-skip-link');
+
+    await page.keyboard.press('Enter');
+
+    await expect.poll(async () =>
+      page.evaluate(() => ({
+        tag: document.activeElement?.tagName ?? null,
+        id: (document.activeElement as HTMLElement | null)?.id ?? null,
+      })),
+    ).toEqual({ tag: 'MAIN', id: 'ch-main' });
   });
 });
