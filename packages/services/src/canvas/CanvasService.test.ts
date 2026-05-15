@@ -214,4 +214,64 @@ describe('CanvasService', () => {
       name: 'empty',
     })).rejects.toThrow('canvas_show requires either "html" or "file"');
   });
+
+  describe('a11y baseline wrapping (#4)', () => {
+    function readCanvasFile(mindPath: string, name: string): string {
+      return fs.readFileSync(
+        path.join(mindPath, '.chamber', 'canvas', `${name}.html`),
+        'utf8',
+      );
+    }
+
+    it('wraps fragment HTML in <main id="ch-main"> so the skip link has a target', async () => {
+      const mindPath = makeMindPath();
+
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Lesson</h1>',
+        name: 'lesson',
+        open_browser: false,
+      });
+
+      const content = readCanvasFile(mindPath, 'lesson');
+      expect(content).toMatch(
+        /<main\s+id="ch-main"[^>]*>[\s\S]*?<h1>Lesson<\/h1>[\s\S]*?<\/main>/,
+      );
+    });
+
+    it('HTML-escapes title when wrapping a fragment to prevent <title> breakout', async () => {
+      const mindPath = makeMindPath();
+
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: 'safe',
+        open_browser: false,
+        title: '</title><script>alert(1)</script>',
+      });
+
+      const content = readCanvasFile(mindPath, 'safe');
+      expect(content).not.toContain('</title><script>alert(1)</script>');
+      expect(content).toContain(
+        '&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;',
+      );
+    });
+
+    it('HTML-escapes title when updating a canvas to prevent <title> breakout', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: 'safe',
+        open_browser: false,
+      });
+
+      service.updateCanvas('mind-1', mindPath, {
+        html: '<h1>y</h1>',
+        name: 'safe',
+        title: '<img src=x onerror=alert(1)>',
+      });
+
+      const content = readCanvasFile(mindPath, 'safe');
+      expect(content).not.toContain('<img src=x onerror=alert(1)>');
+      expect(content).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    });
+  });
 });
