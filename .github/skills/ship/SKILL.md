@@ -7,7 +7,7 @@ description: End-to-end shipping workflow for the Chamber repo. Use this when th
 
 Drive Chamber work from a feature branch to a clean, reviewable pull request. This skill replaces the older `pr` workflow name; use it for "ship", "ship it", "open a PR", "prepare this PR", "finalize", "land this branch", and related shipping requests.
 
-The user is `ianphil`. The default base branch is `master` unless a caller supplies a stack parent branch. Commits must include the Chamber Co-authored-by trailer. Use `gh` for all GitHub operations. Never use MCP.
+The user is `johnhain-msft`. The default base branch is `master` unless a caller supplies a stack parent branch. Commits must include the Chamber Co-authored-by trailer. Use `gh` for all GitHub operations. Never use MCP.
 
 ## Modes
 

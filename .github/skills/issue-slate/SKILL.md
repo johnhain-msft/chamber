@@ -7,7 +7,7 @@ description: Batch workflow for Chamber issue slates. Use this when the user ask
 
 Drive a labeled or explicitly supplied GitHub issue slate from triage through reviewable PRs.
 
-This skill coordinates the Chamber `ship` skill. Use `gh` for all GitHub operations. Never use MCP. The default base branch is `master`, and the default repository is `ianphil/chamber`.
+This skill coordinates the Chamber `ship` skill. Use `gh` for all GitHub operations. Never use MCP. The default base branch is `master`, and the default repository is `johnhain-msft/chamber`.
 
 ## When to use
 
@@ -23,8 +23,8 @@ Do not use this skill for a single already-scoped PR. Use the `ship` skill direc
 
 ## Defaults
 
-- User: `ianphil`.
-- Repository: `ianphil/chamber`.
+- User: `johnhain-msft`.
+- Repository: `johnhain-msft/chamber`.
 - Base branch: `master`.
 - Labels are priority buckets: `now`, `next`, `later`.
 - Default slate label: ask if unclear; otherwise use the label named by the user.
@@ -83,8 +83,8 @@ Do not invent new smoke scripts. If no existing smoke covers the path, document 
 2. Sync issue metadata with `gh`:
 
    ```powershell
-   gh issue list --repo ianphil/chamber --state open --label <label> --limit 100 --json number,title,labels,state,url,updatedAt
-   gh issue list --repo ianphil/chamber --state all --limit 100 --json number,title,labels,state,url,updatedAt
+   gh issue list --repo johnhain-msft/chamber --state open --label <label> --limit 100 --json number,title,labels,state,url,updatedAt
+   gh issue list --repo johnhain-msft/chamber --state all --limit 100 --json number,title,labels,state,url,updatedAt
    ```
 
 3. Check whether all relevant issues have exactly one priority label from `now`, `next`, and `later`.
@@ -192,7 +192,7 @@ Merge stack parents first. Because the repo deletes merged head branches, GitHub
 Read the GitHub issue body and comments:
 
 ```powershell
-gh issue view <issue-number> --repo ianphil/chamber --comments
+gh issue view <issue-number> --repo johnhain-msft/chamber --comments
 ```
 
 Inspect the nearest code, tests, and docs before editing. Follow existing Chamber conventions.
@@ -245,7 +245,7 @@ Run the Chamber `ship` skill for the current branch in autopilot mode. Carry for
 For child branches, explicitly tell the `ship` skill that the PR base is the parent branch, not `master`. If the skill still creates the PR against `master`, immediately fix the base with:
 
 ```powershell
-gh pr edit <pr-number> --repo ianphil/chamber --base <parent-branch>
+gh pr edit <pr-number> --repo johnhain-msft/chamber --base <parent-branch>
 ```
 
 ### 10. Record result
@@ -266,13 +266,13 @@ When the user explicitly approves a PR merge:
 1. Verify checks are green:
 
    ```powershell
-   gh pr checks <pr-number> --repo ianphil/chamber
+   gh pr checks <pr-number> --repo johnhain-msft/chamber
    ```
 
 2. Admin squash merge only if the user asks for admin merge:
 
    ```powershell
-   gh pr merge <pr-number> --repo ianphil/chamber --admin --squash --delete-branch
+   gh pr merge <pr-number> --repo johnhain-msft/chamber --admin --squash --delete-branch
    ```
 
 3. Pull latest `master`:
@@ -292,7 +292,7 @@ At the end of a slate:
 2. Verify no open issue unexpectedly remains with the slate label:
 
    ```powershell
-   gh issue list --repo ianphil/chamber --state open --label <label> --limit 100
+   gh issue list --repo johnhain-msft/chamber --state open --label <label> --limit 100
    ```
 
 3. Confirm all PR URLs are recorded in the roadmap.
@@ -311,6 +311,6 @@ At the end of a slate:
 
 ## Notes
 
-- Last proven shape: the 2026-04-27 `now` slate used this pattern to produce PRs #149-#155, with PR #137 closing two stale items before execution and PR #156 handling release follow-up.
+- Last proven shape (upstream `ianphil/chamber`): the 2026-04-27 `now` slate used this pattern to produce PRs #149-#155, with PR #137 closing two stale items before execution and PR #156 handling release follow-up. These PR numbers do not exist on `johnhain-msft/chamber`; they describe the workflow that produced them upstream.
 - Keep the roadmap lightweight, but keep each PR mini-plan specific. The value is in repeating small, reviewable loops rather than doing one giant implementation pass.
 - Prefer transparency over automation magic. The agent owns orchestration; GitHub remains the source of truth for issues and PRs.
