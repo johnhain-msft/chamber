@@ -22,6 +22,13 @@ interface CanvasServerOptions {
   resolveContentDir: (mindId: string) => string | null;
   onAction: (action: CanvasAction) => void;
   authorizeRequest: (mindId: string, filename: string, token: string | null) => boolean;
+  /**
+   * Returns the presentation sidecar JSON for `(mindId, filename)` or null when
+   * no sidecar exists. Optional so existing callers (and tests) without
+   * presentation support continue to compile and behave as before — when
+   * absent, the server behaves as if every canvas lacks a presentation.
+   */
+  resolvePresentation?: (mindId: string, filename: string) => string | null;
 }
 
 type CanvasClient = ServerResponse<IncomingMessage>;
@@ -161,7 +168,22 @@ a:visited { color: var(--ch-link-visited); }
 }
 </style>`;
 
-function buildBridgeScript(filename: string): string {
+function buildBridgeScript(filename: string, opts: { hasPresentation: boolean } = { hasPresentation: false }): string {
+  const presentationFetch = opts.hasPresentation
+    ? `
+  window.__chamberCanvas = window.__chamberCanvas || { presentation: null };
+  fetch('_presentation?canvas=' + encodeURIComponent(canvasFile) + '&token=' + encodeURIComponent(canvasToken))
+    .then(function(r) { return r.status === 200 ? r.json() : null; })
+    .then(function(json) {
+      window.__chamberCanvas.presentation = json;
+      document.dispatchEvent(new CustomEvent('__chamberCanvas:presentation', { detail: json }));
+    })
+    .catch(function() {
+      window.__chamberCanvas.presentation = null;
+      document.dispatchEvent(new CustomEvent('__chamberCanvas:presentation', { detail: null }));
+    });
+`
+    : '';
   return `
 <script>
 (function() {
@@ -182,7 +204,7 @@ function buildBridgeScript(filename: string): string {
       });
     }
   };
-
+${presentationFetch}
   function wireViewToggle() {
     var btn = document.querySelector('button.ch-view-toggle');
     if (!btn || btn.dataset.chWired === '1') { return; }
@@ -311,8 +333,8 @@ function injectScript(html: string, bridgeScript: string): string {
   return `${html}${bridgeScript}`;
 }
 
-function injectBridge(html: string, filename: string): string {
-  const bridgeScript = buildBridgeScript(filename);
+function injectBridge(html: string, filename: string, opts: { hasPresentation: boolean } = { hasPresentation: false }): string {
+  const bridgeScript = buildBridgeScript(filename, opts);
   const styled = injectStyle(html);
   const { html: withMain, mainId } = resolveMainElement(styled);
   const withSkip = injectSkipLink(withMain, mainId);
@@ -444,6 +466,17 @@ export class CanvasServer implements CanvasServerLike {
       return;
     }
 
+    if (rest.length === 1 && rest[0] === '_presentation') {
+      this.handlePresentation(
+        req,
+        res,
+        mindId,
+        requestUrl.searchParams.get('canvas'),
+        requestUrl.searchParams.get('token'),
+      );
+      return;
+    }
+
     this.handleStaticFile(res, mindId, rest, requestUrl.searchParams.get('token'));
   }
 
@@ -514,6 +547,43 @@ export class CanvasServer implements CanvasServerLike {
     }
   }
 
+  private handlePresentation(
+    req: IncomingMessage,
+    res: ServerResponse,
+    mindId: string,
+    filename: string | null,
+    token: string | null,
+  ): void {
+    if (!filename) {
+      res.writeHead(400);
+      res.end('{"error":"missing canvas"}');
+      return;
+    }
+    if (req.method !== 'GET') {
+      res.writeHead(405);
+      res.end('{"error":"method not allowed"}');
+      return;
+    }
+    if (!this.options.authorizeRequest(mindId, filename, token)) {
+      res.writeHead(403);
+      res.end('{"error":"forbidden"}');
+      return;
+    }
+    const sidecar = this.options.resolvePresentation
+      ? this.options.resolvePresentation(mindId, filename)
+      : null;
+    if (sidecar === null) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
+    });
+    res.end(sidecar);
+  }
+
   private handleStaticFile(res: ServerResponse, mindId: string, segments: string[], token: string | null): void {
     const contentDir = this.options.resolveContentDir(mindId);
     if (!contentDir) {
@@ -548,7 +618,10 @@ export class CanvasServer implements CanvasServerLike {
       const mimeType = MIME_TYPES[extension] ?? 'application/octet-stream';
 
       if (extension === '.html') {
-        content = injectBridge(content.toString('utf8'), normalizedRelativePath);
+        const hasPresentation = this.options.resolvePresentation
+          ? this.options.resolvePresentation(mindId, normalizedRelativePath) !== null
+          : false;
+        content = injectBridge(content.toString('utf8'), normalizedRelativePath, { hasPresentation });
       }
 
       res.writeHead(200, {

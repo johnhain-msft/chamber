@@ -193,6 +193,7 @@ export class CanvasService implements ChamberToolProvider {
       resolveContentDir: (mindId) => this.getContentDirForMind(mindId),
       onAction: (action) => this.onAction(this.decorateCanvasAction(action)),
       authorizeRequest: (mindId, filename, token) => this.isAuthorizedCanvasRequest(mindId, filename, token),
+      resolvePresentation: (mindId, filename) => this.resolvePresentationForRequest(mindId, filename),
     });
     this.openExternal = options.openExternal ?? {
       open: () => {
@@ -486,6 +487,26 @@ export class CanvasService implements ChamberToolProvider {
       return;
     }
     this.removePresentationSidecar(contentDir, name);
+  }
+
+  private resolvePresentationForRequest(mindId: string, filename: string): string | null {
+    const contentDir = this.getContentDirForMind(mindId);
+    if (!contentDir) {
+      return null;
+    }
+    const sidecarName = presentationSidecarFilename(filename);
+    const sidecarPath = path.resolve(contentDir, sidecarName);
+    if (!isPathInside(contentDir, sidecarPath)) {
+      return null;
+    }
+    if (!fs.existsSync(sidecarPath) || !fs.statSync(sidecarPath).isFile()) {
+      return null;
+    }
+    try {
+      return fs.readFileSync(sidecarPath, 'utf8');
+    } catch {
+      return null;
+    }
   }
 
   private totalCanvasCount(): number {

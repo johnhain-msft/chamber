@@ -26,16 +26,19 @@ describe('CanvasServer', () => {
   let server: CanvasServer;
   const mindDirs = new Map<string, string>();
   const tokens = new Map<string, string>();
+  const presentations = new Map<string, string>();
   const onAction = vi.fn();
 
   beforeEach(() => {
     mindDirs.clear();
     tokens.clear();
+    presentations.clear();
     onAction.mockReset();
     server = new CanvasServer({
       resolveContentDir: (mindId) => mindDirs.get(mindId) ?? null,
       onAction,
       authorizeRequest: (mindId, filename, token) => tokens.get(`${mindId}:${filename}`) === token,
+      resolvePresentation: (mindId, filename) => presentations.get(`${mindId}:${filename}`) ?? null,
     });
   });
 
@@ -339,6 +342,122 @@ describe('CanvasServer', () => {
       expect(countMatches(html, /<a[^>]*\bclass=["'][^"']*\bch-skip-link\b/g)).toBe(1);
       expect(countMatches(html, /<button[^>]*\bclass=["'][^"']*\bch-view-toggle\b/g)).toBe(1);
       expect(countMatches(html, /<main\b/g)).toBe(1);
+    });
+  });
+
+  describe('_presentation endpoint (#5)', () => {
+    const MIND_ID = 'pres-mind';
+    const FILENAME = 'flow.html';
+    const TOKEN = 'pres-token';
+    const SIDECAR_JSON = JSON.stringify({
+      steps: [
+        { id: 'intro', title: 'Intro' },
+        { id: 'detail', title: 'Detail' },
+      ],
+    });
+
+    function setupCanvas(opts: { withPresentation: boolean }): void {
+      const mindDir = makeMindDir(MIND_ID);
+      mindDirs.set(MIND_ID, mindDir);
+      tokens.set(`${MIND_ID}:${FILENAME}`, TOKEN);
+      fs.writeFileSync(
+        path.join(mindDir, FILENAME),
+        '<!DOCTYPE html><html><body><h1>Flow</h1></body></html>',
+        'utf8',
+      );
+      if (opts.withPresentation) {
+        presentations.set(`${MIND_ID}:${FILENAME}`, SIDECAR_JSON);
+      }
+    }
+
+    it('returns 200 with the sidecar JSON when token is valid and sidecar exists', async () => {
+      setupCanvas({ withPresentation: true });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/_presentation?canvas=${encodeURIComponent(FILENAME)}&token=${TOKEN}`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toMatch(/application\/json/);
+      const body = await response.text();
+      expect(JSON.parse(body)).toEqual(JSON.parse(SIDECAR_JSON));
+    });
+
+    it('returns 403 with the same error shape as _action when token is wrong', async () => {
+      setupCanvas({ withPresentation: true });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/_presentation?canvas=${encodeURIComponent(FILENAME)}&token=wrong`,
+      );
+
+      expect(response.status).toBe(403);
+      expect(await response.text()).toBe('{"error":"forbidden"}');
+    });
+
+    it('returns 404 with an empty body when no sidecar exists', async () => {
+      setupCanvas({ withPresentation: false });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/_presentation?canvas=${encodeURIComponent(FILENAME)}&token=${TOKEN}`,
+      );
+
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe('');
+    });
+
+    it('returns 400 when the canvas query parameter is missing', async () => {
+      setupCanvas({ withPresentation: true });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/_presentation?token=${TOKEN}`,
+      );
+
+      expect(response.status).toBe(400);
+    });
+
+    it('returns 405 when the method is not GET', async () => {
+      setupCanvas({ withPresentation: true });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/_presentation?canvas=${encodeURIComponent(FILENAME)}&token=${TOKEN}`,
+        { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } },
+      );
+
+      expect(response.status).toBe(405);
+    });
+
+    it('extends the bridge script with a _presentation fetch when the canvas has a sidecar', async () => {
+      setupCanvas({ withPresentation: true });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+
+      expect(html).toContain('_presentation?canvas=');
+      expect(html).toMatch(/window\.__chamberCanvas\b/);
+    });
+
+    it('leaves the bridge script unchanged when the canvas has no sidecar (back-compat)', async () => {
+      setupCanvas({ withPresentation: false });
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+
+      expect(html).not.toContain('_presentation');
+      expect(html).not.toContain('__chamberCanvas');
+      // Bridge SSE + action plumbing is still present
+      expect(html).toContain("EventSource('_sse?canvas=");
+      expect(html).toContain("fetch('_action?canvas=");
     });
   });
 });
