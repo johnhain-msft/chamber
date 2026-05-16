@@ -634,4 +634,58 @@ describe('CanvasService', () => {
       expect(isPathInside(contentDir, sidecar)).toBe(true);
     });
   });
+
+  describe('integration: real CanvasServer end-to-end (#5)', () => {
+    let realService: CanvasService;
+
+    beforeEach(() => {
+      realService = new CanvasService({
+        openExternal: { open: () => {} },
+      });
+    });
+
+    afterEach(async () => {
+      await realService.releaseMind('mind-1').catch(() => {});
+    });
+
+    it('serves a canvas with engine injected when showCanvas wrote a presentation sidecar', async () => {
+      const mindPath = makeMindPath();
+      const result = await realService.showCanvas('mind-1', mindPath, {
+        html: '<section id="a"></section><section id="b"></section>',
+        name: 'flow',
+        open_browser: false,
+        presentation: {
+          steps: [
+            { id: 'a', title: 'A' },
+            { id: 'b', title: 'B' },
+          ],
+        },
+      });
+      const url = result.match(/https?:\/\/\S+/)?.[0] ?? '';
+
+      const response = await fetch(url);
+      const html = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(html).toContain('__chamberCanvas:presentation');
+      expect(html).toContain('createPresentationEngine');
+    });
+
+    it('serves a canvas WITHOUT engine injected when no presentation was supplied', async () => {
+      const mindPath = makeMindPath();
+      const result = await realService.showCanvas('mind-1', mindPath, {
+        html: '<h1>plain</h1>',
+        name: 'plain',
+        open_browser: false,
+      });
+      const url = result.match(/https?:\/\/\S+/)?.[0] ?? '';
+
+      const response = await fetch(url);
+      const html = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(html).not.toContain('createPresentationEngine');
+      expect(html).not.toContain('__chamberCanvas:presentation');
+    });
+  });
 });

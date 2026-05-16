@@ -494,7 +494,8 @@ export class CanvasService implements ChamberToolProvider {
     if (!contentDir) {
       return null;
     }
-    const sidecarName = presentationSidecarFilename(filename);
+    const name = filename.replace(/\.html$/i, '');
+    const sidecarName = presentationSidecarFilename(name);
     const sidecarPath = path.resolve(contentDir, sidecarName);
     if (!isPathInside(contentDir, sidecarPath)) {
       return null;
