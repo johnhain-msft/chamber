@@ -538,4 +538,31 @@ describe('CanvasServer', () => {
       expect(gz.length).toBeLessThan(8192);
     });
   });
+
+  describe('backward-compat byte-identity (#5)', () => {
+    const MIND_ID = 'snapshot-mind';
+    const FILENAME = 'report.html';
+    const TOKEN = 'snapshot-token';
+    const INPUT_HTML =
+      '<!DOCTYPE html><html><head></head><body><h1>Snapshot</h1></body></html>';
+
+    it('serves byte-identical HTML for a canvas with no presentation sidecar', async () => {
+      const mindDir = makeMindDir(MIND_ID);
+      mindDirs.set(MIND_ID, mindDir);
+      tokens.set(`${MIND_ID}:${FILENAME}`, TOKEN);
+      fs.writeFileSync(path.join(mindDir, FILENAME), INPUT_HTML, 'utf8');
+
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+
+      expect(html).not.toContain('createPresentationEngine');
+      expect(html).not.toContain('_presentation?canvas=');
+      await expect(html).toMatchFileSnapshot(
+        './__fixtures__/no-presentation-canvas.html',
+      );
+    });
+  });
 });

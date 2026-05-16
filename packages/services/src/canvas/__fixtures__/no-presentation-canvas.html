@@ -1,0 +1,179 @@
+<!DOCTYPE html><html><head>
+<style>
+:root {
+  color-scheme: light dark;
+  --ch-background: #0b0b10;
+  --ch-foreground: #f5f5f7;
+  --ch-card: #16161d;
+  --ch-border: #6b6b78;
+  --ch-muted: #1f1f28;
+  --ch-muted-foreground: #b9b9c5;
+  --ch-accent: #b45309;
+  --ch-genesis: #6ee7b7;
+  --ch-link: #7dd3fc;
+  --ch-link-visited: #c4b5fd;
+  --ch-skip-link-bg: #1a1a22;
+  --ch-skip-link-fg: #f5f5f7;
+  --ch-focus-ring: #b45309;
+  --ch-radius: 0.75rem;
+  --ch-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --ch-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --ch-background: #ffffff;
+    --ch-foreground: #18181b;
+    --ch-card: #f7f7f9;
+    --ch-border: #87878f;
+    --ch-muted: #f0f0f3;
+    --ch-muted-foreground: #57575e;
+    --ch-accent: #b45309;
+    --ch-genesis: #15803d;
+    --ch-link: #1e40af;
+    --ch-link-visited: #6b21a8;
+    --ch-skip-link-bg: #1a1a22;
+    --ch-skip-link-fg: #f5f5f7;
+    --ch-focus-ring: #b45309;
+  }
+}
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--ch-background);
+  color: var(--ch-foreground);
+  font-family: var(--ch-font-sans);
+}
+:root[data-ch-view="linear"] { scroll-behavior: auto; }
+.ch-page { min-height: 100vh; padding: 1.5rem; background: var(--ch-background); color: var(--ch-foreground); }
+.ch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
+.ch-card { border: 1px solid var(--ch-border); border-radius: var(--ch-radius); background: var(--ch-card); padding: 1rem; }
+.ch-muted { color: var(--ch-muted-foreground); }
+.ch-button, .ch-button-secondary {
+  border: 0;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+}
+.ch-button { background: var(--ch-foreground); color: var(--ch-background); }
+.ch-button-secondary { background: var(--ch-muted); color: var(--ch-foreground); }
+.ch-input {
+  width: 100%;
+  border: 1px solid var(--ch-border);
+  border-radius: 0.5rem;
+  background: var(--ch-muted);
+  color: var(--ch-foreground);
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+}
+.ch-input::placeholder { color: var(--ch-muted-foreground); }
+.ch-table { width: 100%; border-collapse: collapse; }
+.ch-table th, .ch-table td { border-bottom: 1px solid var(--ch-border); padding: 0.625rem; text-align: left; }
+.ch-table th { color: var(--ch-muted-foreground); }
+.ch-badge { border: 1px solid var(--ch-border); border-radius: 999px; display: inline-flex; padding: 0.125rem 0.5rem; color: var(--ch-muted-foreground); }
+a { color: var(--ch-link); }
+a:visited { color: var(--ch-link-visited); }
+:focus-visible {
+  outline: 2px solid var(--ch-focus-ring);
+  outline-offset: 2px;
+}
+.ch-skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--ch-skip-link-bg);
+  color: var(--ch-skip-link-fg);
+  border: 2px solid var(--ch-focus-ring);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  font: inherit;
+  transform: translateY(-200%);
+  transition: transform 150ms ease;
+  z-index: 1000;
+}
+.ch-skip-link:focus,
+.ch-skip-link:focus-visible {
+  transform: translateY(0);
+}
+.ch-view-toggle {
+  background: var(--ch-muted);
+  color: var(--ch-foreground);
+  border: 1px solid var(--ch-border);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  font: inherit;
+  cursor: pointer;
+}
+.ch-view-toggle[aria-pressed="true"] {
+  background: var(--ch-foreground);
+  color: var(--ch-background);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  body { background: Canvas; color: CanvasText; }
+  .ch-card { background: Canvas; border-color: CanvasText; }
+  .ch-button { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-button-secondary { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-input { background: Field; color: FieldText; border: 1px solid FieldText; }
+  .ch-skip-link { background: ButtonFace; color: ButtonText; border-color: Highlight; }
+  .ch-view-toggle { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-view-toggle[aria-pressed="true"] { background: Highlight; color: HighlightText; }
+  .ch-badge { background: Canvas; color: CanvasText; border-color: CanvasText; }
+  a { color: LinkText; }
+  a:visited { color: VisitedText; }
+  :focus-visible { outline-color: Highlight; }
+}
+</style>
+</head><body><a class="ch-skip-link" href="#ch-main">Skip to main content</a><button type="button" class="ch-view-toggle" aria-pressed="false" data-action="ch-view-toggle">Linear view</button><main id="ch-main" tabindex="-1"><h1>Snapshot</h1></main>
+<script>
+(function() {
+  var canvasFile = "report.html";
+  var canvasToken = new URLSearchParams(location.search).get('token') || '';
+  var es = new EventSource('_sse?canvas=' + encodeURIComponent(canvasFile) + '&token=' + encodeURIComponent(canvasToken));
+  es.onmessage = function(e) {
+    if (e.data === 'reload') { location.reload(); }
+    if (e.data === 'close') { window.close(); }
+  };
+
+  window.canvas = {
+    sendAction: function(name, data) {
+      return fetch('_action?canvas=' + encodeURIComponent(canvasFile) + '&token=' + encodeURIComponent(canvasToken), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: name, data: data || {}, timestamp: Date.now() })
+      });
+    }
+  };
+
+  function wireViewToggle() {
+    var btn = document.querySelector('button.ch-view-toggle');
+    if (!btn || btn.dataset.chWired === '1') { return; }
+    btn.dataset.chWired = '1';
+    btn.addEventListener('click', function() {
+      var nextLinear = document.documentElement.dataset.chView !== 'linear';
+      if (nextLinear) {
+        document.documentElement.dataset.chView = 'linear';
+        btn.setAttribute('aria-pressed', 'true');
+      } else {
+        delete document.documentElement.dataset.chView;
+        btn.setAttribute('aria-pressed', 'false');
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireViewToggle);
+  } else {
+    wireViewToggle();
+  }
+})();
+</script>
+</body></html>
