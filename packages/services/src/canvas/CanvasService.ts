@@ -302,6 +302,20 @@ export class CanvasService implements ChamberToolProvider {
     return url;
   }
 
+  /**
+   * Updates an existing canvas in place.
+   *
+   * Presentation sidecar semantics differ intentionally from {@link showCanvas}:
+   * - `showCanvas` treats `presentation` as **replace-or-clear**: omitting the
+   *   field removes any existing sidecar so a canvas can be downgraded from a
+   *   presentation back to a plain document.
+   * - `updateCanvas` treats `presentation` as **additive / patch**: omitting the
+   *   field leaves the existing sidecar untouched so the HTML body can be
+   *   refreshed independently of the presentation config.
+   *
+   * If a caller needs to clear a presentation from an existing canvas, they
+   * should use `showCanvas` with the new HTML and no `presentation` field.
+   */
   updateCanvas(mindId: string, mindPath: string, input: CanvasUpdateInput): string {
     validateCanvasName(input.name);
     if (input.presentation) {

@@ -68,12 +68,21 @@ export function buildPresentationEngineScript(): string {
     return d;
   }
 
+  function escapeForHtml(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   function buildWarning(doc, ids) {
     var w = doc.createElement('div');
     w.className = 'ch-pres-warning';
     w.setAttribute('role', 'status');
     var items = '';
-    for (var i = 0; i < ids.length; i++) { items += '<li><code>' + ids[i] + '</code></li>'; }
+    for (var i = 0; i < ids.length; i++) { items += '<li><code>' + escapeForHtml(ids[i]) + '</code></li>'; }
     w.innerHTML = '<p>Unknown presentation steps (no matching element):</p><ul>' + items + '</ul>';
     return w;
   }

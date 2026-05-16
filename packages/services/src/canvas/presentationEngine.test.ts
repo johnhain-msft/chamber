@@ -266,6 +266,23 @@ describe('createPresentationEngine — unknown step ids', () => {
     expect(warning?.textContent).toContain('ghost');
     expect(warning?.textContent).toContain('phantom');
   });
+
+  it('HTML-escapes step ids in the unknown-step warning region to defuse injected markup', () => {
+    build({
+      config: {
+        steps: [
+          { id: 'intro', title: 'Intro' },
+          { id: '<img src=x onerror=alert(1)>', title: 'Bad' },
+        ],
+        options: { linearByDefault: true },
+      },
+    });
+    const warning = document.querySelector('.ch-pres-warning');
+    expect(warning).not.toBeNull();
+    expect(warning?.querySelector('img')).toBeNull();
+    expect(warning?.innerHTML).toContain('&lt;img');
+    expect(warning?.innerHTML).not.toContain('<img');
+  });
 });
 
 describe('createPresentationEngine — tabindex handling', () => {

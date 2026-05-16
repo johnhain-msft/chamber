@@ -88,11 +88,22 @@ function buildHelpDialog(doc: Document): HTMLElement {
   return dialog;
 }
 
+function escapePresentationHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function buildWarningRegion(doc: Document, unknownIds: string[]): HTMLElement {
   const el = doc.createElement('div');
   el.className = 'ch-pres-warning';
   el.setAttribute('role', 'status');
-  const items = unknownIds.map((id) => `<li><code>${id}</code></li>`).join('');
+  const items = unknownIds
+    .map((id) => `<li><code>${escapePresentationHtml(id)}</code></li>`)
+    .join('');
   el.innerHTML = `<p>Unknown presentation steps (no matching element):</p><ul>${items}</ul>`;
   return el;
 }
