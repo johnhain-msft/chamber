@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CanvasService } from './CanvasService';
+import { isPathInside } from './canvasPaths';
 import type { CanvasServerLike } from './types';
 
 const tempDirs: string[] = [];
@@ -381,6 +382,256 @@ describe('CanvasService', () => {
       const content = readCanvasFile(mindPath, 'user-html');
       expect(content).toContain('<html lang="ja">');
       expect(content).not.toContain('<html lang="pt-BR">');
+    });
+  });
+
+  describe('presentation sidecar (#5)', () => {
+    function sidecarPath(mindPath: string, name: string): string {
+      return path.join(mindPath, '.chamber', 'canvas', `${name}.presentation.json`);
+    }
+
+    function readSidecar(mindPath: string, name: string): unknown {
+      return JSON.parse(fs.readFileSync(sidecarPath(mindPath, name), 'utf8'));
+    }
+
+    const minimalPresentation = {
+      steps: [
+        { id: 'intro', title: 'Intro' },
+        { id: 'detail', title: 'Detail' },
+      ],
+    };
+
+    it('writes the sidecar JSON next to the HTML when showCanvas carries presentation', async () => {
+      const mindPath = makeMindPath();
+
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'flow',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+
+      expect(fs.existsSync(sidecarPath(mindPath, 'flow'))).toBe(true);
+      expect(readSidecar(mindPath, 'flow')).toEqual(minimalPresentation);
+    });
+
+    it('does not write a sidecar when showCanvas omits presentation', async () => {
+      const mindPath = makeMindPath();
+
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'plain',
+        open_browser: false,
+      });
+
+      expect(fs.existsSync(sidecarPath(mindPath, 'plain'))).toBe(false);
+    });
+
+    it('removes a stale sidecar when re-showing the same name without presentation', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'mixed',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+      expect(fs.existsSync(sidecarPath(mindPath, 'mixed'))).toBe(true);
+
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi again</h1>',
+        name: 'mixed',
+        open_browser: false,
+      });
+
+      expect(fs.existsSync(sidecarPath(mindPath, 'mixed'))).toBe(false);
+    });
+
+    it('updateCanvas with presentation overwrites the existing sidecar', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'flow',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+
+      const next = {
+        steps: [{ id: 'only', title: 'Only step' }],
+        startStepId: 'only',
+      };
+      service.updateCanvas('mind-1', mindPath, {
+        html: '<h1>After</h1>',
+        name: 'flow',
+        presentation: next,
+      });
+
+      expect(readSidecar(mindPath, 'flow')).toEqual(next);
+    });
+
+    it('updateCanvas without presentation leaves the existing sidecar untouched (additive semantics)', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'flow',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+
+      service.updateCanvas('mind-1', mindPath, {
+        html: '<h1>Refreshed HTML</h1>',
+        name: 'flow',
+      });
+
+      expect(fs.existsSync(sidecarPath(mindPath, 'flow'))).toBe(true);
+      expect(readSidecar(mindPath, 'flow')).toEqual(minimalPresentation);
+    });
+
+    it('closeCanvas deletes both the HTML and the sidecar', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>Hi</h1>',
+        name: 'flow',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+      expect(fs.existsSync(sidecarPath(mindPath, 'flow'))).toBe(true);
+
+      await service.closeCanvas('mind-1', mindPath, { name: 'flow' });
+
+      expect(fs.existsSync(path.join(mindPath, '.chamber', 'canvas', 'flow.html'))).toBe(false);
+      expect(fs.existsSync(sidecarPath(mindPath, 'flow'))).toBe(false);
+    });
+
+    it('closeCanvas "all" deletes every sidecar', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>A</h1>',
+        name: 'alpha',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>B</h1>',
+        name: 'beta',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+
+      await service.closeCanvas('mind-1', mindPath, { name: 'all' });
+
+      expect(fs.existsSync(sidecarPath(mindPath, 'alpha'))).toBe(false);
+      expect(fs.existsSync(sidecarPath(mindPath, 'beta'))).toBe(false);
+    });
+
+    it('rejects a step transition longer than the Sullivan per-step budget (WCAG 2.2.2)', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'too-long',
+          open_browser: false,
+          presentation: {
+            steps: [{ id: 'a', title: 'A', transition: { kind: 'fade', durationMs: 801 } }],
+          },
+        }),
+      ).rejects.toThrow(/WCAG 2\.2\.2|MAX_TRANSITION_DURATION_MS|800/);
+    });
+
+    it('rejects when the aggregate transition budget is exceeded', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'aggregate',
+          open_browser: false,
+          presentation: {
+            steps: [
+              { id: 'a', title: 'A', transition: { kind: 'fade', durationMs: 800 } },
+              { id: 'b', title: 'B', transition: { kind: 'fade', durationMs: 800 } },
+              { id: 'c', title: 'C', transition: { kind: 'fade', durationMs: 800 } },
+              { id: 'd', title: 'D', transition: { kind: 'fade', durationMs: 800 } },
+              { id: 'e', title: 'E', transition: { kind: 'fade', durationMs: 800 } },
+              { id: 'f', title: 'F', transition: { kind: 'fade', durationMs: 800 } },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/aggregate|MAX_AGGREGATE_TRANSITION_DURATION_MS|4000/);
+    });
+
+    it('rejects auto-advance shorter than 2000ms (per Issue #5 acceptance)', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'fast-auto',
+          open_browser: false,
+          presentation: {
+            steps: [{ id: 'a', title: 'A' }],
+            options: { autoAdvance: { intervalMs: 1999 } },
+          },
+        }),
+      ).rejects.toThrow(/autoAdvance|2000/);
+    });
+
+    it('rejects an empty steps array', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'empty',
+          open_browser: false,
+          presentation: { steps: [] },
+        }),
+      ).rejects.toThrow(/at least one step|steps/);
+    });
+
+    it('rejects an empty step id', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'empty-id',
+          open_browser: false,
+          presentation: { steps: [{ id: '', title: 'Empty' }] },
+        }),
+      ).rejects.toThrow(/step id/i);
+    });
+
+    it('rejects duplicate step ids', async () => {
+      const mindPath = makeMindPath();
+
+      await expect(
+        service.showCanvas('mind-1', mindPath, {
+          html: '<h1>x</h1>',
+          name: 'dup',
+          open_browser: false,
+          presentation: {
+            steps: [
+              { id: 'same', title: 'First' },
+              { id: 'same', title: 'Second' },
+            ],
+          },
+        }),
+      ).rejects.toThrow(/duplicate|unique/i);
+    });
+
+    it('resolved sidecar path stays inside the canvas content directory', async () => {
+      const mindPath = makeMindPath();
+      await service.showCanvas('mind-1', mindPath, {
+        html: '<h1>x</h1>',
+        name: 'safe-path',
+        open_browser: false,
+        presentation: minimalPresentation,
+      });
+
+      const contentDir = path.join(mindPath, '.chamber', 'canvas');
+      const sidecar = sidecarPath(mindPath, 'safe-path');
+      expect(isPathInside(contentDir, sidecar)).toBe(true);
     });
   });
 });

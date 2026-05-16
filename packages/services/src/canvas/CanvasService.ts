@@ -7,6 +7,10 @@ import type { ChamberToolProvider } from '../chamberTools';
 const log = Logger.create('canvas');
 import type { Tool } from '../mind/types';
 import type { ExternalOpener } from '../ports';
+import {
+  MAX_AGGREGATE_TRANSITION_DURATION_MS,
+  MAX_TRANSITION_DURATION_MS,
+} from '../sullivan/motionLimits';
 import { CanvasServer } from './CanvasServer';
 import { isPathInside } from './canvasPaths';
 import { buildCanvasTools } from './tools';
@@ -14,6 +18,7 @@ import type {
   CanvasAction,
   CanvasCloseInput,
   CanvasEntry,
+  CanvasPresentation,
   CanvasServerLike,
   CanvasShowInput,
   CanvasUpdateInput,
@@ -22,6 +27,20 @@ import type {
 const CANVAS_DIR = path.join('.chamber', 'canvas');
 const VALID_CANVAS_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const VALID_BCP47_LANG = /^[a-zA-Z]{1,3}(-[a-zA-Z0-9]{1,8})*$/;
+
+/**
+ * Minimum auto-advance interval, in milliseconds, accepted by
+ * `validatePresentation`. Issue #5 acceptance criterion: auto-advance is off
+ * by default and, when opted in, must not be shorter than 2000ms so reduced-
+ * motion users still get a chance to pause/cancel.
+ *
+ * Sullivan's `motionLimits` module is read-only and does not export this
+ * value (auto-advance is an authoring choice on top of the per-step motion
+ * budget). The constant lives inline as a service-side editorial choice;
+ * if Sullivan ever publishes an equivalent, switch to that import.
+ */
+// per Issue #5 acceptance criteria
+const MIN_AUTO_ADVANCE_INTERVAL_MS = 2000;
 
 export interface CanvasServiceOptions {
   onAction?: (action: CanvasAction) => void;
@@ -45,6 +64,72 @@ function validateCanvasLang(lang: string): void {
       `Invalid canvas lang "${lang}". Use a BCP-47 language tag like "en", "en-US", or "pt-BR".`,
     );
   }
+}
+
+/**
+ * Validates a presentation payload against the issue #5 acceptance criteria
+ * and Sullivan's read-only motion limits.
+ *
+ * Surface-level invariants enforced here (independent of the engine):
+ *   - At least one step; every step has a non-empty id; ids are unique.
+ *   - Per-step transition `durationMs` ≤ `MAX_TRANSITION_DURATION_MS` (WCAG
+ *     2.2.2, anchored in `sullivan/motionLimits.ts`).
+ *   - Sum of `durationMs` across steps ≤ `MAX_AGGREGATE_TRANSITION_DURATION_MS`.
+ *   - `autoAdvance.intervalMs` ≥ `MIN_AUTO_ADVANCE_INTERVAL_MS` so reduced-
+ *     motion users always have a chance to pause/cancel.
+ *
+ * Engine-side concerns (unknown step ids, reduced-motion substitution) are
+ * handled at render time; this validator runs at parse/write time so a bad
+ * payload never reaches a sidecar on disk.
+ */
+function validatePresentation(presentation: CanvasPresentation): void {
+  if (!Array.isArray(presentation.steps) || presentation.steps.length === 0) {
+    throw new Error('Presentation must declare at least one step.');
+  }
+
+  const seenIds = new Set<string>();
+  let aggregateMs = 0;
+  for (const step of presentation.steps) {
+    if (typeof step.id !== 'string' || step.id.trim().length === 0) {
+      throw new Error('Step id must be a non-empty string.');
+    }
+    if (seenIds.has(step.id)) {
+      throw new Error(`Duplicate step id "${step.id}". Step ids must be unique.`);
+    }
+    seenIds.add(step.id);
+
+    const durationMs = step.transition?.durationMs;
+    if (typeof durationMs === 'number') {
+      if (durationMs < 0) {
+        throw new Error(`Step "${step.id}" has a negative transition durationMs.`);
+      }
+      if (durationMs > MAX_TRANSITION_DURATION_MS) {
+        throw new Error(
+          `Step "${step.id}" transition durationMs (${durationMs}) exceeds the Sullivan per-step budget of ${MAX_TRANSITION_DURATION_MS}ms (WCAG 2.2.2 Pause, Stop, Hide).`,
+        );
+      }
+      aggregateMs += durationMs;
+    }
+  }
+
+  if (aggregateMs > MAX_AGGREGATE_TRANSITION_DURATION_MS) {
+    throw new Error(
+      `Presentation aggregate transition duration (${aggregateMs}ms) exceeds the Sullivan budget of ${MAX_AGGREGATE_TRANSITION_DURATION_MS}ms (WCAG 2.2.2 / 2.3.3).`,
+    );
+  }
+
+  const autoAdvance = presentation.options?.autoAdvance;
+  if (autoAdvance) {
+    if (typeof autoAdvance.intervalMs !== 'number' || autoAdvance.intervalMs < MIN_AUTO_ADVANCE_INTERVAL_MS) {
+      throw new Error(
+        `autoAdvance.intervalMs (${String(autoAdvance.intervalMs)}) must be at least ${MIN_AUTO_ADVANCE_INTERVAL_MS}ms per Issue #5 acceptance.`,
+      );
+    }
+  }
+}
+
+function presentationSidecarFilename(name: string): string {
+  return `${name}.presentation.json`;
 }
 
 function escapeHtml(value: string): string {
@@ -137,6 +222,9 @@ export class CanvasService implements ChamberToolProvider {
     if (!input.html && !input.file) {
       throw new Error('canvas_show requires either "html" or "file"');
     }
+    if (input.presentation) {
+      validatePresentation(input.presentation);
+    }
 
     const contentDir = this.ensureMind(mindId, mindPath);
     const filename = `${input.name}.html`;
@@ -152,6 +240,12 @@ export class CanvasService implements ChamberToolProvider {
       fs.copyFileSync(input.file, targetPath);
     } else {
       fs.writeFileSync(targetPath, wrapHtml(input.name, input.html ?? '', { title: input.title, lang: input.lang }), 'utf8');
+    }
+
+    if (input.presentation) {
+      this.writePresentationSidecar(contentDir, input.name, input.presentation);
+    } else {
+      this.removePresentationSidecar(contentDir, input.name);
     }
 
     const port = await this.server.start();
@@ -209,6 +303,9 @@ export class CanvasService implements ChamberToolProvider {
 
   updateCanvas(mindId: string, mindPath: string, input: CanvasUpdateInput): string {
     validateCanvasName(input.name);
+    if (input.presentation) {
+      validatePresentation(input.presentation);
+    }
     const contentDir = this.ensureMind(mindId, mindPath);
     const existing = this.requireCanvas(mindId, input.name);
     fs.writeFileSync(
@@ -216,6 +313,9 @@ export class CanvasService implements ChamberToolProvider {
       wrapHtml(input.name, input.html, { title: input.title, lang: input.lang }),
       'utf8',
     );
+    if (input.presentation) {
+      this.writePresentationSidecar(contentDir, input.name, input.presentation);
+    }
     this.server.reload(mindId, existing.filename);
     return `Canvas **${input.name}** updated. Browser will auto-reload.`;
   }
@@ -238,6 +338,7 @@ export class CanvasService implements ChamberToolProvider {
     }
 
     this.deleteCanvasFile(mindId, existing.filename);
+    this.deletePresentationSidecar(mindId, input.name);
     const remaining = this.totalCanvasCount();
     if (remaining === 0) {
       await this.server.stop();
@@ -275,6 +376,7 @@ export class CanvasService implements ChamberToolProvider {
     const count = canvases.size;
     for (const entry of canvases.values()) {
       this.deleteCanvasFile(mindId, entry.filename);
+      this.deletePresentationSidecar(mindId, entry.name);
       this.removeLensCanvasMapping(mindId, entry.filename);
     }
     this.canvases.delete(mindId);
@@ -360,6 +462,30 @@ export class CanvasService implements ChamberToolProvider {
     }
 
     fs.rmSync(path.join(contentDir, filename), { force: true });
+  }
+
+  private writePresentationSidecar(contentDir: string, name: string, presentation: CanvasPresentation): void {
+    const sidecarPath = path.resolve(contentDir, presentationSidecarFilename(name));
+    if (!isPathInside(contentDir, sidecarPath)) {
+      throw new Error(`Refusing to write presentation sidecar outside canvas content directory: ${sidecarPath}`);
+    }
+    fs.writeFileSync(sidecarPath, `${JSON.stringify(presentation, null, 2)}\n`, 'utf8');
+  }
+
+  private removePresentationSidecar(contentDir: string, name: string): void {
+    const sidecarPath = path.resolve(contentDir, presentationSidecarFilename(name));
+    if (!isPathInside(contentDir, sidecarPath)) {
+      return;
+    }
+    fs.rmSync(sidecarPath, { force: true });
+  }
+
+  private deletePresentationSidecar(mindId: string, name: string): void {
+    const contentDir = this.getContentDirForMind(mindId);
+    if (!contentDir) {
+      return;
+    }
+    this.removePresentationSidecar(contentDir, name);
   }
 
   private totalCanvasCount(): number {
