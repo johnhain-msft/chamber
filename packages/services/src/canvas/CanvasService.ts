@@ -8,6 +8,7 @@ const log = Logger.create('canvas');
 import type { Tool } from '../mind/types';
 import type { ExternalOpener } from '../ports';
 import { CanvasServer } from './CanvasServer';
+import { isPathInside } from './canvasPaths';
 import { buildCanvasTools } from './tools';
 import type {
   CanvasAction,
@@ -20,6 +21,7 @@ import type {
 
 const CANVAS_DIR = path.join('.chamber', 'canvas');
 const VALID_CANVAS_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const VALID_BCP47_LANG = /^[a-zA-Z]{1,3}(-[a-zA-Z0-9]{1,8})*$/;
 
 export interface CanvasServiceOptions {
   onAction?: (action: CanvasAction) => void;
@@ -37,36 +39,53 @@ function validateCanvasName(name: string): void {
   }
 }
 
-function normalizePath(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+function validateCanvasLang(lang: string): void {
+  if (!VALID_BCP47_LANG.test(lang)) {
+    throw new Error(
+      `Invalid canvas lang "${lang}". Use a BCP-47 language tag like "en", "en-US", or "pt-BR".`,
+    );
+  }
 }
 
-function isPathInside(parent: string, child: string): boolean {
-  const normalizedParent = normalizePath(parent);
-  const normalizedChild = normalizePath(child);
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
-function wrapHtml(name: string, html: string, title?: string): string {
+interface WrapHtmlOptions {
+  title?: string;
+  lang?: string;
+}
+
+function wrapHtml(name: string, html: string, opts: WrapHtmlOptions = {}): string {
+  if (opts.lang !== undefined) {
+    validateCanvasLang(opts.lang);
+  }
+  const lang = opts.lang ?? 'en';
   const lowerCaseHtml = html.toLowerCase();
   if (!lowerCaseHtml.includes('<!doctype') && !lowerCaseHtml.includes('<html')) {
-    const pageTitle = title ?? name;
+    const pageTitle = opts.title ?? name;
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${escapeHtml(lang)}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${pageTitle}</title>
+  <title>${escapeHtml(pageTitle)}</title>
 </head>
 <body>
+<main id="ch-main" tabindex="-1">
 ${html}
+</main>
 </body>
 </html>`;
   }
 
-  if (title && !lowerCaseHtml.includes('<title>')) {
-    return html.replace('</head>', `  <title>${title}</title>\n</head>`);
+  if (opts.title && !lowerCaseHtml.includes('<title>')) {
+    return html.replace(/<\/head>/i, `  <title>${escapeHtml(opts.title)}</title>\n</head>`);
   }
 
   return html;
@@ -132,7 +151,7 @@ export class CanvasService implements ChamberToolProvider {
       }
       fs.copyFileSync(input.file, targetPath);
     } else {
-      fs.writeFileSync(targetPath, wrapHtml(input.name, input.html ?? '', input.title), 'utf8');
+      fs.writeFileSync(targetPath, wrapHtml(input.name, input.html ?? '', { title: input.title, lang: input.lang }), 'utf8');
     }
 
     const port = await this.server.start();
@@ -194,7 +213,7 @@ export class CanvasService implements ChamberToolProvider {
     const existing = this.requireCanvas(mindId, input.name);
     fs.writeFileSync(
       path.join(contentDir, existing.filename),
-      wrapHtml(input.name, input.html, input.title),
+      wrapHtml(input.name, input.html, { title: input.title, lang: input.lang }),
       'utf8',
     );
     this.server.reload(mindId, existing.filename);

@@ -75,4 +75,41 @@ describe('buildCanvasTools', () => {
 
     expect(mockService.listCanvases).toHaveBeenCalledWith('mind-1', 'C:\\minds\\one');
   });
+
+  describe('lang parameter schema (#4)', () => {
+    function getProperty(
+      tool: { parameters: { properties: unknown; required?: unknown } } | undefined,
+      name: string,
+    ): { type?: unknown; description?: unknown } {
+      if (!tool) {
+        throw new Error('Expected tool to be defined');
+      }
+      const properties = tool.parameters.properties as Record<string, { type?: unknown; description?: unknown }>;
+      return properties[name] ?? {};
+    }
+
+    it('canvas_show exposes an optional lang string parameter', () => {
+      const tools = buildCanvasTools('mind-1', 'C:\\minds\\one', mockService as unknown as CanvasService);
+      const show = tools.find((tool) => tool.name === 'canvas_show') as
+        | { parameters: { properties: Record<string, unknown>; required: string[] } }
+        | undefined;
+      const lang = getProperty(show, 'lang');
+
+      expect(lang.type).toBe('string');
+      expect(String(lang.description ?? '')).toMatch(/lang|BCP-?47|language/i);
+      expect(show?.parameters.required).not.toContain('lang');
+    });
+
+    it('canvas_update exposes an optional lang string parameter', () => {
+      const tools = buildCanvasTools('mind-1', 'C:\\minds\\one', mockService as unknown as CanvasService);
+      const update = tools.find((tool) => tool.name === 'canvas_update') as
+        | { parameters: { properties: Record<string, unknown>; required: string[] } }
+        | undefined;
+      const lang = getProperty(update, 'lang');
+
+      expect(lang.type).toBe('string');
+      expect(String(lang.description ?? '')).toMatch(/lang|BCP-?47|language/i);
+      expect(update?.parameters.required).not.toContain('lang');
+    });
+  });
 });

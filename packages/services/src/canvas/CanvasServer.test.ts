@@ -156,4 +156,189 @@ describe('CanvasServer', () => {
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Forbidden');
   });
+
+  describe('CHAMBER_CANVAS_STYLE a11y baseline (#4)', () => {
+    async function fetchServedHtml(): Promise<string> {
+      const mindDir = makeMindDir('a11y-mind');
+      mindDirs.set('a11y-mind', mindDir);
+      tokens.set('a11y-mind:report.html', 'a11y-token');
+      fs.writeFileSync(
+        path.join(mindDir, 'report.html'),
+        '<!DOCTYPE html><html><head></head><body><h1>Hi</h1></body></html>',
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/a11y-mind/report.html?token=a11y-token`,
+      );
+      return response.text();
+    }
+
+    it('declares color-scheme: light dark so the canvas honors the OS theme', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/color-scheme:\s*light dark/);
+    });
+
+    it('emits :focus-visible rules so keyboard focus is always perceivable', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toContain(':focus-visible');
+    });
+
+    it('collapses transitions and animations under prefers-reduced-motion', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+      expect(html).toMatch(
+        /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?transition:\s*none\s*!important[\s\S]*?animation:\s*none\s*!important/,
+      );
+    });
+
+    it('uses CSS system colors inside a forced-colors media block', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/@media\s*\(forced-colors:\s*active\)/);
+      expect(html).toMatch(/background:\s*Canvas\b/);
+      expect(html).toMatch(/color:\s*CanvasText\b/);
+      expect(html).toMatch(/background:\s*ButtonFace\b/);
+      expect(html).toMatch(/color:\s*ButtonText\b/);
+      expect(html).toMatch(/outline-color:\s*Highlight\b/);
+    });
+
+    it('defines a .ch-skip-link rule so the bridge can style the skip target', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(/\.ch-skip-link\s*\{/);
+    });
+
+    it('declares the :root[data-ch-view="linear"] scroll-behavior hook for the presentation engine in #5', async () => {
+      const html = await fetchServedHtml();
+      expect(html).toMatch(
+        /:root\[data-ch-view="linear"\]\s*\{[\s\S]*?scroll-behavior:\s*auto/,
+      );
+    });
+
+    it('injects style + skip-link + bridge script even when </HEAD>/</BODY> are uppercase', async () => {
+      const mindDir = makeMindDir('a11y-mixedcase');
+      mindDirs.set('a11y-mixedcase', mindDir);
+      tokens.set('a11y-mixedcase:upper.html', 'a11y-token');
+      fs.writeFileSync(
+        path.join(mindDir, 'upper.html'),
+        '<!DOCTYPE HTML><HTML><HEAD></HEAD><BODY><H1>Hi</H1></BODY></HTML>',
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/a11y-mixedcase/upper.html?token=a11y-token`,
+      );
+      const html = await response.text();
+
+      expect(html).toContain('--ch-background');
+      expect(html).toMatch(/<a[^>]*\bclass=["'][^"']*\bch-skip-link\b/i);
+      expect(html).toMatch(/<main\b[^>]*\bid=["']ch-main["']/i);
+      expect(html).toContain("EventSource('_sse?canvas=");
+      const scriptIdx = html.indexOf("EventSource('_sse?canvas=");
+      const closeBodyIdx = html.search(/<\/body\s*>/i);
+      expect(scriptIdx).toBeGreaterThan(-1);
+      expect(closeBodyIdx).toBeGreaterThan(-1);
+      expect(scriptIdx).toBeLessThan(closeBodyIdx);
+    });
+  });
+
+  describe('injectBridge a11y affordances (#4)', () => {
+    async function fetchInjectedHtml(
+      bodyHtml: string,
+      opts?: { headHtml?: string },
+    ): Promise<string> {
+      const mindId = 'bridge-mind';
+      const mindDir = makeMindDir(mindId);
+      mindDirs.set(mindId, mindDir);
+      const filename = 'report.html';
+      tokens.set(`${mindId}:${filename}`, 'bridge-token');
+      fs.writeFileSync(
+        path.join(mindDir, filename),
+        `<!DOCTYPE html><html><head>${opts?.headHtml ?? ''}</head><body>${bodyHtml}</body></html>`,
+        'utf8',
+      );
+      const port = await server.start();
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${mindId}/${filename}?token=bridge-token`,
+      );
+      return response.text();
+    }
+
+    function countMatches(html: string, pattern: RegExp): number {
+      const matches = html.match(pattern);
+      return matches ? matches.length : 0;
+    }
+
+    it('wraps body content in <main id="ch-main" tabindex="-1"> when no <main> element exists', async () => {
+      const html = await fetchInjectedHtml('<h1>Title</h1><p>Body</p>');
+      expect(html).toMatch(
+        /<main\s+id=["']ch-main["']\s+tabindex=["']-1["']\s*>[\s\S]*<h1>Title<\/h1>[\s\S]*<p>Body<\/p>[\s\S]*<\/main>/,
+      );
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+    });
+
+    it('reuses an existing <main id="ch-main"> instead of double-wrapping', async () => {
+      const html = await fetchInjectedHtml('<main id="ch-main"><h1>Existing</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(countMatches(html, /<main\b[^>]*\bid=["']ch-main["']/g)).toBe(1);
+    });
+
+    it('adds id="ch-main" and tabindex="-1" to an existing <main> element that has no id', async () => {
+      const html = await fetchInjectedHtml('<main><h1>Unlabeled</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(html).toMatch(
+        /<main\b[^>]*\bid=["']ch-main["'][^>]*\btabindex=["']-1["'][^>]*>[\s\S]*<h1>Unlabeled<\/h1>[\s\S]*<\/main>/,
+      );
+    });
+
+    it('points the skip-link at the existing <main> id when it differs from ch-main', async () => {
+      const html = await fetchInjectedHtml('<main id="primary"><h1>Custom</h1></main>');
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+      expect(html).toMatch(
+        /<a[^>]*\bclass=["'][^"']*\bch-skip-link\b[^"']*["'][^>]*\bhref=["']#primary["']/,
+      );
+    });
+
+    it('prepends the .ch-skip-link as the first child of <body> pointing to #ch-main', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      expect(html).toMatch(
+        /<body[^>]*>\s*<a[^>]*\bclass=["'][^"']*\bch-skip-link\b[^"']*["'][^>]*\bhref=["']#ch-main["']/,
+      );
+    });
+
+    it('renders a view-toggle button with aria-pressed="false" and data-action="ch-view-toggle"', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      const buttonMatch = html.match(
+        /<button\b[^>]*\bclass=["'][^"']*\bch-view-toggle\b[^"']*["'][^>]*>/,
+      );
+      expect(buttonMatch).not.toBeNull();
+      const button = buttonMatch?.[0] ?? '';
+      expect(button).toMatch(/\baria-pressed=["']false["']/);
+      expect(button).toMatch(/\bdata-action=["']ch-view-toggle["']/);
+      expect(button).not.toMatch(/\bon[a-z]+=/i);
+    });
+
+    it('uses addEventListener to wire the view-toggle to documentElement.dataset.chView without inline handlers', async () => {
+      const html = await fetchInjectedHtml('<h1>Body</h1>');
+      const scripts = html.match(/<script\b[\s\S]*?<\/script>/g) ?? [];
+      const bridge = scripts.find((s) => s.includes("EventSource('_sse")) ?? '';
+      expect(bridge).not.toBe('');
+      expect(bridge).toMatch(/addEventListener\(\s*['"]click['"]/);
+      expect(bridge).toContain('document.documentElement.dataset.chView');
+      expect(bridge).not.toContain('document.body.dataset.chView');
+      expect(bridge).toMatch(/['"]linear['"]/);
+    });
+
+    it('does not duplicate chamber markup when the user HTML already contains skip-link, view-toggle, and <main id="ch-main">', async () => {
+      const html = await fetchInjectedHtml(
+        [
+          '<a class="ch-skip-link" href="#ch-main">Skip to main content</a>',
+          '<button class="ch-view-toggle" aria-pressed="false" data-action="ch-view-toggle">Linear</button>',
+          '<main id="ch-main"><h1>X</h1></main>',
+        ].join(''),
+      );
+      expect(countMatches(html, /<a[^>]*\bclass=["'][^"']*\bch-skip-link\b/g)).toBe(1);
+      expect(countMatches(html, /<button[^>]*\bclass=["'][^"']*\bch-view-toggle\b/g)).toBe(1);
+      expect(countMatches(html, /<main\b/g)).toBe(1);
+    });
+  });
 });

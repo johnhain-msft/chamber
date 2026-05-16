@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { URL } from 'node:url';
+import { CANVAS_PALETTE_DARK, CANVAS_PALETTE_LIGHT } from './canvasPalette';
+import { isPathInside } from './canvasPaths';
 import type { CanvasAction, CanvasServerLike } from './types';
 
 const MIME_TYPES: Record<string, string> = {
@@ -27,18 +29,40 @@ type CanvasClient = ServerResponse<IncomingMessage>;
 const CHAMBER_CANVAS_STYLE = `
 <style>
 :root {
-  color-scheme: dark;
-  --ch-background: oklch(0.145 0.008 260);
-  --ch-foreground: oklch(0.985 0 0);
-  --ch-card: oklch(0.195 0.015 260);
-  --ch-border: oklch(0.25 0.012 260);
-  --ch-muted: oklch(0.255 0.015 260);
-  --ch-muted-foreground: oklch(0.708 0.01 260);
-  --ch-accent: oklch(0.255 0.015 260);
-  --ch-genesis: oklch(0.72 0.15 160);
+  color-scheme: light dark;
+  --ch-background: ${CANVAS_PALETTE_DARK.background};
+  --ch-foreground: ${CANVAS_PALETTE_DARK.foreground};
+  --ch-card: ${CANVAS_PALETTE_DARK.card};
+  --ch-border: ${CANVAS_PALETTE_DARK.border};
+  --ch-muted: ${CANVAS_PALETTE_DARK.muted};
+  --ch-muted-foreground: ${CANVAS_PALETTE_DARK.mutedForeground};
+  --ch-accent: ${CANVAS_PALETTE_DARK.accent};
+  --ch-genesis: ${CANVAS_PALETTE_DARK.genesis};
+  --ch-link: ${CANVAS_PALETTE_DARK.link};
+  --ch-link-visited: ${CANVAS_PALETTE_DARK.linkVisited};
+  --ch-skip-link-bg: ${CANVAS_PALETTE_DARK.skipLinkBg};
+  --ch-skip-link-fg: ${CANVAS_PALETTE_DARK.skipLinkFg};
+  --ch-focus-ring: ${CANVAS_PALETTE_DARK.focusRing};
   --ch-radius: 0.75rem;
   --ch-font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --ch-font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --ch-background: ${CANVAS_PALETTE_LIGHT.background};
+    --ch-foreground: ${CANVAS_PALETTE_LIGHT.foreground};
+    --ch-card: ${CANVAS_PALETTE_LIGHT.card};
+    --ch-border: ${CANVAS_PALETTE_LIGHT.border};
+    --ch-muted: ${CANVAS_PALETTE_LIGHT.muted};
+    --ch-muted-foreground: ${CANVAS_PALETTE_LIGHT.mutedForeground};
+    --ch-accent: ${CANVAS_PALETTE_LIGHT.accent};
+    --ch-genesis: ${CANVAS_PALETTE_LIGHT.genesis};
+    --ch-link: ${CANVAS_PALETTE_LIGHT.link};
+    --ch-link-visited: ${CANVAS_PALETTE_LIGHT.linkVisited};
+    --ch-skip-link-bg: ${CANVAS_PALETTE_LIGHT.skipLinkBg};
+    --ch-skip-link-fg: ${CANVAS_PALETTE_LIGHT.skipLinkFg};
+    --ch-focus-ring: ${CANVAS_PALETTE_LIGHT.focusRing};
+  }
 }
 * { box-sizing: border-box; }
 html, body { min-height: 100%; }
@@ -48,6 +72,7 @@ body {
   color: var(--ch-foreground);
   font-family: var(--ch-font-sans);
 }
+:root[data-ch-view="linear"] { scroll-behavior: auto; }
 .ch-page { min-height: 100vh; padding: 1.5rem; background: var(--ch-background); color: var(--ch-foreground); }
 .ch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem; }
 .ch-card { border: 1px solid var(--ch-border); border-radius: var(--ch-radius); background: var(--ch-card); padding: 1rem; }
@@ -70,9 +95,70 @@ body {
   font: inherit;
   padding: 0.5rem 0.75rem;
 }
+.ch-input::placeholder { color: var(--ch-muted-foreground); }
 .ch-table { width: 100%; border-collapse: collapse; }
 .ch-table th, .ch-table td { border-bottom: 1px solid var(--ch-border); padding: 0.625rem; text-align: left; }
+.ch-table th { color: var(--ch-muted-foreground); }
 .ch-badge { border: 1px solid var(--ch-border); border-radius: 999px; display: inline-flex; padding: 0.125rem 0.5rem; color: var(--ch-muted-foreground); }
+a { color: var(--ch-link); }
+a:visited { color: var(--ch-link-visited); }
+:focus-visible {
+  outline: 2px solid var(--ch-focus-ring);
+  outline-offset: 2px;
+}
+.ch-skip-link {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--ch-skip-link-bg);
+  color: var(--ch-skip-link-fg);
+  border: 2px solid var(--ch-focus-ring);
+  border-radius: 0.5rem;
+  text-decoration: none;
+  font: inherit;
+  transform: translateY(-200%);
+  transition: transform 150ms ease;
+  z-index: 1000;
+}
+.ch-skip-link:focus,
+.ch-skip-link:focus-visible {
+  transform: translateY(0);
+}
+.ch-view-toggle {
+  background: var(--ch-muted);
+  color: var(--ch-foreground);
+  border: 1px solid var(--ch-border);
+  border-radius: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  font: inherit;
+  cursor: pointer;
+}
+.ch-view-toggle[aria-pressed="true"] {
+  background: var(--ch-foreground);
+  color: var(--ch-background);
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (forced-colors: active) {
+  body { background: Canvas; color: CanvasText; }
+  .ch-card { background: Canvas; border-color: CanvasText; }
+  .ch-button { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-button-secondary { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-input { background: Field; color: FieldText; border: 1px solid FieldText; }
+  .ch-skip-link { background: ButtonFace; color: ButtonText; border-color: Highlight; }
+  .ch-view-toggle { background: ButtonFace; color: ButtonText; border: 1px solid ButtonText; }
+  .ch-view-toggle[aria-pressed="true"] { background: Highlight; color: HighlightText; }
+  .ch-badge { background: Canvas; color: CanvasText; border-color: CanvasText; }
+  a { color: LinkText; }
+  a:visited { color: VisitedText; }
+  :focus-visible { outline-color: Highlight; }
+}
 </style>`;
 
 function buildBridgeScript(filename: string): string {
@@ -96,38 +182,142 @@ function buildBridgeScript(filename: string): string {
       });
     }
   };
+
+  function wireViewToggle() {
+    var btn = document.querySelector('button.ch-view-toggle');
+    if (!btn || btn.dataset.chWired === '1') { return; }
+    btn.dataset.chWired = '1';
+    btn.addEventListener('click', function() {
+      var nextLinear = document.documentElement.dataset.chView !== 'linear';
+      if (nextLinear) {
+        document.documentElement.dataset.chView = 'linear';
+        btn.setAttribute('aria-pressed', 'true');
+      } else {
+        delete document.documentElement.dataset.chView;
+        btn.setAttribute('aria-pressed', 'false');
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireViewToggle);
+  } else {
+    wireViewToggle();
+  }
 })();
 </script>`;
 }
 
+function escapeReplacement(value: string): string {
+  return value.replace(/\$/g, '$$$$');
+}
+
+function findBodyOpen(html: string): { match: string; start: number; end: number } | null {
+  const match = html.match(/<body\b[^>]*>/i);
+  if (!match || match.index === undefined) {
+    return null;
+  }
+  return { match: match[0], start: match.index, end: match.index + match[0].length };
+}
+
+function injectStyle(html: string): string {
+  const headCloseMatch = html.match(/<\/head\s*>/i);
+  if (headCloseMatch && headCloseMatch.index !== undefined) {
+    const idx = headCloseMatch.index;
+    return `${html.slice(0, idx)}${CHAMBER_CANVAS_STYLE}\n${html.slice(idx)}`;
+  }
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.start)}<head>${CHAMBER_CANVAS_STYLE}</head>${html.slice(bodyOpen.start)}`;
+  }
+  return `${CHAMBER_CANVAS_STYLE}${html}`;
+}
+
+function resolveMainElement(html: string): { html: string; mainId: string } {
+  const mainOpenMatch = html.match(/<main\b([^>]*)>/i);
+  if (mainOpenMatch) {
+    const attrs = mainOpenMatch[1] ?? '';
+    const idMatch = attrs.match(/\bid\s*=\s*["']([^"']+)["']/);
+    if (idMatch && idMatch[1]) {
+      return { html, mainId: idMatch[1] };
+    }
+    const tabindexSuffix = /\btabindex\s*=/i.test(attrs) ? '' : ' tabindex="-1"';
+    const replacement = `<main${attrs} id="ch-main"${tabindexSuffix}>`;
+    return {
+      html: html.replace(mainOpenMatch[0], escapeReplacement(replacement)),
+      mainId: 'ch-main',
+    };
+  }
+
+  const bodyOpen = findBodyOpen(html);
+  const bodyCloseMatch = html.match(/<\/body\s*>/i);
+  if (bodyOpen && bodyCloseMatch && bodyCloseMatch.index !== undefined) {
+    const before = html.slice(0, bodyOpen.end);
+    const body = html.slice(bodyOpen.end, bodyCloseMatch.index);
+    const after = html.slice(bodyCloseMatch.index);
+    return {
+      html: `${before}<main id="ch-main" tabindex="-1">${body}</main>${after}`,
+      mainId: 'ch-main',
+    };
+  }
+
+  return {
+    html: `${html}<main id="ch-main" tabindex="-1"></main>`,
+    mainId: 'ch-main',
+  };
+}
+
+function injectSkipLink(html: string, mainId: string): string {
+  if (/<a\b[^>]*\bclass\s*=\s*["'][^"']*\bch-skip-link\b/i.test(html)) {
+    return html;
+  }
+  const safeMainId = mainId.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const skipLink = `<a class="ch-skip-link" href="#${safeMainId}">Skip to main content</a>`;
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.end)}${skipLink}${html.slice(bodyOpen.end)}`;
+  }
+  return `${skipLink}${html}`;
+}
+
+function injectViewToggle(html: string): string {
+  if (/<button\b[^>]*\bclass\s*=\s*["'][^"']*\bch-view-toggle\b/i.test(html)) {
+    return html;
+  }
+  const button = `<button type="button" class="ch-view-toggle" aria-pressed="false" data-action="ch-view-toggle">Linear view</button>`;
+  const skipLinkMatch = html.match(/<a\b[^>]*\bclass\s*=\s*["'][^"']*\bch-skip-link\b[^"']*["'][^>]*>[\s\S]*?<\/a>/i);
+  if (skipLinkMatch && skipLinkMatch.index !== undefined) {
+    const insertAt = skipLinkMatch.index + skipLinkMatch[0].length;
+    return `${html.slice(0, insertAt)}${button}${html.slice(insertAt)}`;
+  }
+  const bodyOpen = findBodyOpen(html);
+  if (bodyOpen) {
+    return `${html.slice(0, bodyOpen.end)}${button}${html.slice(bodyOpen.end)}`;
+  }
+  return `${button}${html}`;
+}
+
+function injectScript(html: string, bridgeScript: string): string {
+  const bodyCloseMatch = html.match(/<\/body\s*>/i);
+  if (bodyCloseMatch && bodyCloseMatch.index !== undefined) {
+    const idx = bodyCloseMatch.index;
+    return `${html.slice(0, idx)}${bridgeScript}\n${html.slice(idx)}`;
+  }
+  const htmlCloseMatch = html.match(/<\/html\s*>/i);
+  if (htmlCloseMatch && htmlCloseMatch.index !== undefined) {
+    const idx = htmlCloseMatch.index;
+    return `${html.slice(0, idx)}${bridgeScript}\n${html.slice(idx)}`;
+  }
+  return `${html}${bridgeScript}`;
+}
+
 function injectBridge(html: string, filename: string): string {
   const bridgeScript = buildBridgeScript(filename);
-  const additions = `${CHAMBER_CANVAS_STYLE}\n${bridgeScript}`;
-  if (html.includes('</head>')) {
-    const withStyle = html.replace('</head>', `${CHAMBER_CANVAS_STYLE}\n</head>`);
-    if (withStyle.includes('</body>')) {
-      return withStyle.replace('</body>', `${bridgeScript}\n</body>`);
-    }
-    return `${withStyle}${bridgeScript}`;
-  }
-  if (html.includes('</body>')) {
-    return html.replace('</body>', `${additions}\n</body>`);
-  }
-  if (html.includes('</html>')) {
-    return html.replace('</html>', `${additions}\n</html>`);
-  }
-  return `${html}${additions}`;
-}
-
-function normalizePath(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
-function isPathInside(parent: string, child: string): boolean {
-  const normalizedParent = normalizePath(parent);
-  const normalizedChild = normalizePath(child);
-  return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${path.sep}`);
+  const styled = injectStyle(html);
+  const { html: withMain, mainId } = resolveMainElement(styled);
+  const withSkip = injectSkipLink(withMain, mainId);
+  const withToggle = injectViewToggle(withSkip);
+  return injectScript(withToggle, bridgeScript);
 }
 
 function readRequestBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {

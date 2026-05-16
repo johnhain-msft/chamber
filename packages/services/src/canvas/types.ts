@@ -19,6 +19,7 @@ export interface CanvasShowInput {
   html?: string;
   file?: string;
   title?: string;
+  lang?: string;
   open_browser?: boolean;
 }
 
@@ -26,6 +27,7 @@ export interface CanvasUpdateInput {
   name: string;
   html: string;
   title?: string;
+  lang?: string;
 }
 
 export interface CanvasCloseInput {

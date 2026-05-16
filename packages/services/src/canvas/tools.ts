@@ -31,6 +31,10 @@ export function buildCanvasTools(
             type: 'string',
             description: 'Optional page title if html does not already include one.',
           },
+          lang: {
+            type: 'string',
+            description: 'Optional BCP-47 language tag (e.g. "en", "en-US", "pt-BR") for the generated <html lang="..."> element. Ignored when html already contains a full <html> document, or when file is set (the file\'s own <html> is preserved).',
+          },
           open_browser: {
             type: 'boolean',
             description: 'Whether to open the browser. Defaults to true.',
@@ -57,6 +61,10 @@ export function buildCanvasTools(
           title: {
             type: 'string',
             description: 'Optional updated page title.',
+          },
+          lang: {
+            type: 'string',
+            description: 'Optional BCP-47 language tag (e.g. "en", "en-US", "pt-BR") for the generated <html lang="..."> element. Ignored when html already contains a full <html> document.',
           },
         },
         required: ['name', 'html'],
