@@ -460,4 +460,82 @@ describe('CanvasServer', () => {
       expect(html).toContain("fetch('_action?canvas=");
     });
   });
+
+  describe('presentation engine injection (#5)', () => {
+    const MIND_ID = 'engine-mind';
+    const FILENAME = 'flow.html';
+    const TOKEN = 'engine-token';
+
+    function setup(withPresentation: boolean): void {
+      const mindDir = makeMindDir(MIND_ID);
+      mindDirs.set(MIND_ID, mindDir);
+      tokens.set(`${MIND_ID}:${FILENAME}`, TOKEN);
+      fs.writeFileSync(
+        path.join(mindDir, FILENAME),
+        '<!DOCTYPE html><html><body><section id="intro"><h2>Intro</h2></section></body></html>',
+        'utf8',
+      );
+      if (withPresentation) {
+        presentations.set(
+          `${MIND_ID}:${FILENAME}`,
+          JSON.stringify({ steps: [{ id: 'intro', title: 'Intro' }] }),
+        );
+      }
+    }
+
+    function findEngineScript(html: string): string | null {
+      const scripts = html.match(/<script\b[\s\S]*?<\/script>/g) ?? [];
+      return scripts.find((s) => s.includes('createPresentationEngine')) ?? null;
+    }
+
+    it('injects a presentation engine <script> when the canvas has a sidecar', async () => {
+      setup(true);
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+      const engine = findEngineScript(html);
+      expect(engine).not.toBeNull();
+      expect(engine).toContain('__chamberCanvas:presentation');
+    });
+
+    it('does not inject any presentation engine script when there is no sidecar', async () => {
+      setup(false);
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+      expect(findEngineScript(html)).toBeNull();
+      expect(html).not.toContain('createPresentationEngine');
+    });
+
+    it('orders the engine script AFTER the bridge script so __chamberCanvas is populated first', async () => {
+      setup(true);
+      const port = await server.start();
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/${MIND_ID}/${FILENAME}?token=${TOKEN}`,
+      );
+      const html = await response.text();
+      const bridgeIdx = html.indexOf("EventSource('_sse?canvas=");
+      const engineIdx = html.indexOf('createPresentationEngine');
+      expect(bridgeIdx).toBeGreaterThan(-1);
+      expect(engineIdx).toBeGreaterThan(-1);
+      expect(engineIdx).toBeGreaterThan(bridgeIdx);
+    });
+
+    it('keeps the gzipped engine script under the 8 KiB budget', async () => {
+      const { buildPresentationEngineScript } = await import(
+        './buildPresentationEngineScript'
+      );
+      const script: string = buildPresentationEngineScript();
+      const { gzipSync } = await import('node:zlib');
+      const gz = gzipSync(Buffer.from(script, 'utf8'));
+      expect(gz.length).toBeLessThan(8192);
+    });
+  });
 });

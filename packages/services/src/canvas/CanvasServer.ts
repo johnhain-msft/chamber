@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { URL } from 'node:url';
 import { CANVAS_PALETTE_DARK, CANVAS_PALETTE_LIGHT } from './canvasPalette';
 import { isPathInside } from './canvasPaths';
+import { buildPresentationEngineScript } from './buildPresentationEngineScript';
 import type { CanvasAction, CanvasServerLike } from './types';
 
 const MIME_TYPES: Record<string, string> = {
@@ -339,7 +340,11 @@ function injectBridge(html: string, filename: string, opts: { hasPresentation: b
   const { html: withMain, mainId } = resolveMainElement(styled);
   const withSkip = injectSkipLink(withMain, mainId);
   const withToggle = injectViewToggle(withSkip);
-  return injectScript(withToggle, bridgeScript);
+  const withBridge = injectScript(withToggle, bridgeScript);
+  if (!opts.hasPresentation) {
+    return withBridge;
+  }
+  return injectScript(withBridge, buildPresentationEngineScript());
 }
 
 function readRequestBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
