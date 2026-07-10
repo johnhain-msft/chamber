@@ -51,6 +51,7 @@ import type {
   UserProfileImportResult,
   UserProfileSaveRequest,
 } from './types';
+import type { SkillManifest } from './skill-types';
 
 export interface ElectronAPI {
   chat: {
@@ -187,6 +188,13 @@ export interface ElectronAPI {
      * log (#56). Returns an unsubscribe function — call it on unmount.
      */
     onStartupProgress: (callback: (event: StartupProgressEvent) => void) => () => void;
+  };
+  skills: {
+    /**
+     * Lists self-declared metadata for skill directories currently on disk.
+     * This does not attest managed provenance, integrity, or lifecycle state.
+     */
+    listForMind: (mindId: string) => Promise<SkillManifest[]>;
   };
 }
 

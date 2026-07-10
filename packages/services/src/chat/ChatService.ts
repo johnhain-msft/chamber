@@ -2,6 +2,7 @@
 // Gets sessions from MindManager, streams SDK events via callback.
 
 import type { MindManager } from '../mind';
+import { getErrorMessage } from '@chamber/shared/getErrorMessage';
 import type { ChatEvent, ChatImageAttachment, ConversationResumeResult, ConversationSummary, ModelInfo } from '@chamber/shared/types';
 import { modelSelectionKeyFromModel } from '@chamber/shared/model-selection';
 import type { CopilotSession } from '../mind/types';
@@ -33,7 +34,7 @@ const log = Logger.create('ChatService');
 const TURN_END_QUIESCENCE_MS = 1_000;
 
 export class ChatService {
-  private abortControllers = new Map<string, AbortController>();
+  private abortControllers = new Map<string, { messageId: string; controller: AbortController }>();
 
   constructor(
     private readonly mindManager: MindManager,
@@ -60,7 +61,7 @@ export class ChatService {
   ): Promise<void> {
     return this.turnQueue.enqueue(mindId, async () => {
       const abortController = new AbortController();
-      this.abortControllers.set(mindId, abortController);
+      this.abortControllers.set(mindId, { messageId, controller: abortController });
 
       try {
         const context = this.mindManager.getMind(mindId);
@@ -90,10 +91,13 @@ export class ChatService {
         }
       } catch (err) {
         if (abortController.signal.aborted) return;
-        const rawMessage = err instanceof Error ? err.message : String(err);
+        const rawMessage = getErrorMessage(err);
         emit({ type: 'error', message: mapByoLlmError(rawMessage) });
       } finally {
-        this.abortControllers.delete(mindId);
+        const active = this.abortControllers.get(mindId);
+        if (active?.controller === abortController) {
+          this.abortControllers.delete(mindId);
+        }
       }
     });
   }
@@ -370,11 +374,10 @@ export class ChatService {
     }
   }
 
-  async cancelMessage(mindId: string, _messageId: string): Promise<boolean> {
-    void _messageId;
-    const controller = this.abortControllers.get(mindId);
-    if (!controller) return false;
-    controller.abort();
+  async cancelMessage(mindId: string, messageId: string): Promise<boolean> {
+    const active = this.abortControllers.get(mindId);
+    if (!active || active.messageId !== messageId) return false;
+    active.controller.abort();
     this.abortControllers.delete(mindId);
     const context = this.mindManager.getMind(mindId);
     if (context?.session) {

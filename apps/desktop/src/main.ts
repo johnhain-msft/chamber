@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, powerMonitor, session, shell, Notification, type MessageBoxOptions, type NativeImage, type Tray as ElectronTray } from 'electron';
+import { getErrorMessage } from '@chamber/shared/getErrorMessage';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import started from 'electron-squirrel-startup';
 import { DEFAULT_APP_FEATURE_FLAGS, IPC } from '@chamber/shared';
 import type { MindContext, StartupProgressEvent } from '@chamber/shared/types';
@@ -36,6 +37,7 @@ import {
   AuthService,
   CanvasService,
   ChamberCopilotService,
+  listStoredGitHubCredentials,
   ChatroomService,
   ChatService,
   ConfigService,
@@ -46,18 +48,24 @@ import {
   GitHubRegistryClient,
   GitHubReleaseAssetClient,
   CronService,
+  ScriptRunner,
+  AutomationBridge,
   IdentityLoader,
   MarketplaceToolCatalog,
   MessageRouter,
   MicrosoftGraphProfileImporter,
   MsalBrokerGraphTokenProvider,
   MarketplaceRegistryService,
+  MarketplaceSkillCatalog,
+  MarketplaceSkillMaterializer,
   MindManager,
   MindProfileService,
   MindScaffold,
+  MindSkillDiscovery,
   TaskManager,
   TaskLedger,
   ChildProcessRunner,
+  ManagedSkillService,
   ToolInstaller,
   ToolsService,
   TurnQueue,
@@ -81,6 +89,7 @@ import {
   type Notifier,
 } from '@chamber/services';
 import { Logger } from '@chamber/services';
+import { SqliteStore } from '@ianphil/ttasks-ts';
 import { createAppTray, loadAppIcon } from './main/tray/Tray';
 import { installContextMenu } from './main/contextMenu/ContextMenu';
 import { installExternalNavigationGuard } from './main/navigationGuard';
@@ -105,6 +114,7 @@ import { setupChatroomIPC } from './main/ipc/chatroom';
 import { setupConversationHistoryIPC } from './main/ipc/conversationHistory';
 import { setupUpdaterIPC } from './main/ipc/updater';
 import { setupUserProfileIPC } from './main/ipc/userProfile';
+import { setupSkillsIPC } from './main/ipc/skills';
 
 import { EventEmitter } from 'events';
 import { wireLifecycleEvents } from './main/wireLifecycleEvents';
@@ -207,6 +217,7 @@ let scaffold: MindScaffold;
 let genesisTemplateCatalog: GenesisMindTemplateMarketplaceCatalog;
 let genesisTemplateInstaller: GenesisMindTemplateInstaller;
 let marketplaceRegistryService: MarketplaceRegistryService;
+let managedSkillService: ManagedSkillService;
 let toolsService: ToolsService;
 let viewDiscovery: ViewDiscovery;
 let a2aEventBus: EventEmitter;
@@ -223,10 +234,21 @@ let a2aRelayModeService: A2ARelayModeService;
 let chatroomService: ChatroomService;
 let canvasService: CanvasService;
 let cronService: CronService;
+let automationBridgeStop: (() => Promise<void>) | null = null;
 let authService: AuthService;
 let chamberCopilotService: ChamberCopilotService | null = null;
+
+async function getActiveGitHubToken(): Promise<string | null> {
+  const stored = await listStoredGitHubCredentials(credentialStore);
+  const active = configService.load().activeLogin;
+  const entry = active
+    ? stored.find((c) => c.login === active)
+    : stored[0];
+  return entry?.password ?? null;
+}
 let updaterService: UpdaterService;
 const taskLedgersByMindPath = new Map<string, TaskLedger>();
+const ttasksStoresByMindPath = new Map<string, SqliteStore>();
 
 const createTaskLedger = (mindPath: string): TaskLedger => {
   const existing = taskLedgersByMindPath.get(mindPath);
@@ -236,6 +258,23 @@ const createTaskLedger = (mindPath: string): TaskLedger => {
   );
   taskLedgersByMindPath.set(mindPath, ledger);
   return ledger;
+};
+
+const createTTasksStore = (mindPath: string): SqliteStore => {
+  const existing = ttasksStoresByMindPath.get(mindPath);
+  if (existing) return existing;
+  const runsDir = path.join(mindPath, '.chamber', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  const store = new SqliteStore({ path: path.join(runsDir, 'ttasks.db') });
+  ttasksStoresByMindPath.set(mindPath, store);
+  return store;
+};
+
+const closeTTasksStores = (): void => {
+  for (const store of ttasksStoresByMindPath.values()) {
+    store.close();
+  }
+  ttasksStoresByMindPath.clear();
 };
 
 async function initializeRuntime(): Promise<void> {
@@ -249,7 +288,10 @@ async function initializeRuntime(): Promise<void> {
   }).initialize();
 
   const chamberToolsBinDir = getChamberToolsBinDir();
-  const clientFactory = new CopilotClientFactory({ toolsBinDir: chamberToolsBinDir });
+  const clientFactory = new CopilotClientFactory({
+    toolsBinDir: chamberToolsBinDir,
+    getGitHubToken: getActiveGitHubToken,
+  });
   void clientFactory.preloadSdk().catch((err: unknown) => {
     log.warn('SDK preload failed (non-fatal — first createClient will retry):', err);
   });
@@ -271,10 +313,18 @@ async function initializeRuntime(): Promise<void> {
     saveActiveLogin,
     userAgent,
   );
-  scaffold = new MindScaffold();
+  scaffold = new MindScaffold(githubRegistryClient, clientFactory);
   genesisTemplateCatalog = new GenesisMindTemplateMarketplaceCatalog(githubRegistryClient, getGenesisMarketplaceSources);
   genesisTemplateInstaller = new GenesisMindTemplateInstaller(githubRegistryClient, clientFactory, getGenesisMarketplaceSources);
   marketplaceRegistryService = new MarketplaceRegistryService(configService, githubRegistryClient);
+  const marketplaceSkillCatalog = new MarketplaceSkillCatalog(githubRegistryClient, getGenesisMarketplaceSources);
+  managedSkillService = new ManagedSkillService(
+    marketplaceSkillCatalog,
+    new MarketplaceSkillMaterializer(githubRegistryClient),
+  );
+  void managedSkillService.refresh().catch((err: unknown) => {
+    log.warn('Marketplace managed skill refresh failed (non-fatal):', err);
+  });
   const marketplaceToolCatalog = new MarketplaceToolCatalog(githubRegistryClient, getGenesisMarketplaceSources);
   toolsService = new ToolsService(
     marketplaceToolCatalog,
@@ -299,6 +349,7 @@ async function initializeRuntime(): Promise<void> {
     viewDiscovery,
     () => buildProviderConfig(cachedByoLlmConfig),
     () => cachedByoLlmConfig?.model,
+    managedSkillService,
   );
   mindProfileService = new MindProfileService({
     getMindPath: (mindId) => mindManager.getMind(mindId)?.mindPath ?? null,
@@ -318,6 +369,10 @@ async function initializeRuntime(): Promise<void> {
     getLedgerForMind: (mindId) => {
       const mindPath = mindManager.getMind(mindId)?.mindPath;
       return mindPath ? createTaskLedger(mindPath) : undefined;
+    },
+    createTTasksStore: (mindId) => {
+      const mindPath = mindManager.getMind(mindId)?.mindPath;
+      return mindPath ? createTTasksStore(mindPath) : undefined;
     },
   });
   // The SDK model catalog does not include BYO endpoint models, so keep the
@@ -361,14 +416,58 @@ async function initializeRuntime(): Promise<void> {
     },
     openExternal: { open: (url) => shell.openExternal(url) },
   });
-  cronService = new CronService({
-    getTaskManager: () => taskManager,
-    showMind: (mindId) => {
-      mindManager.setActiveMind(mindId);
-      showMainWindow();
+  const automationBridge = new AutomationBridge({
+    onPrompt: async ({ mindId, prompt, recipient }) => {
+      if (recipient && recipient !== mindId) {
+        // Cross-mind prompt routing is intentionally unsupported in v2 (see
+        // AGENTS.md orchestration-safety boundary). Fail loudly rather than
+        // silently delivering to the wrong mind.
+        throw new Error(
+          `cross-mind prompt routing to "${recipient}" is not supported; prompts run against the script's owning mind`,
+        );
+      }
+      if (!mindManager.getMind(mindId)) {
+        throw new Error(`mind ${mindId} not active`);
+      }
+      const text = await mindManager.runIsolatedPrompt(mindId, prompt);
+      return { text };
     },
-    notifier,
-    createTaskLedger,
+    onNotify: async ({ title, body }) => {
+      notifier.notify({ kind: 'info', title, body });
+    },
+    onA2a: async ({ mindId, recipient, message, contextId, referenceTaskIds }) => {
+      if (!mindManager.getMind(mindId)) {
+        throw new Error(`mind ${mindId} not active`);
+      }
+
+      const task = await taskManager.sendTask({
+        recipient,
+        message: {
+          messageId: randomUUID(),
+          role: 'ROLE_USER',
+          parts: [{ text: message, mediaType: 'text/plain' }],
+          metadata: { fromId: mindId, fromName: 'automation' },
+          ...(contextId ? { contextId } : {}),
+          ...(referenceTaskIds?.length ? { referenceTaskIds } : {}),
+        },
+      });
+
+      return {
+        id: task.id,
+        contextId: task.contextId,
+        status: task.status.state,
+      };
+    },
+  });
+  const bridgeStart = await automationBridge.start();
+  automationBridgeStop = bridgeStart.stop;
+  const scriptRunner = new ScriptRunner({
+    bridgeUrl: bridgeStart.url,
+    tokens: automationBridge.tokens,
+  });
+  cronService = new CronService({
+    scriptRunner,
+    createCronRunStore: undefined,
   });
   const a2aToolProvider = new A2aToolProvider(messageRouter, activeA2AResolver, taskManager);
   const mindToolProviders: ChamberToolProvider[] = [cronService, canvasService, a2aToolProvider];
@@ -402,10 +501,23 @@ function createChamberCopilotService(
   const service = new ChamberCopilotService({
     connectionsByMode: {
       safe: () => new AcpConnection({
-        connectionFactory: defaultAcpConnectionFactory({
-          command: cliPath,
-          args: ['--acp', '--no-auto-update'],
-        }),
+        connectionFactory: async () => {
+          const gitHubToken = await getActiveGitHubToken();
+          const env = { ...process.env };
+          const authArgs = gitHubToken
+            ? ['--auth-token-env', 'COPILOT_SDK_AUTH_TOKEN']
+            : [];
+          if (gitHubToken) {
+            env.COPILOT_SDK_AUTH_TOKEN = gitHubToken;
+          } else {
+            delete env.COPILOT_SDK_AUTH_TOKEN;
+          }
+          return defaultAcpConnectionFactory({
+            command: cliPath,
+            args: ['--acp', '--no-auto-update', '--no-auto-login', ...authArgs],
+            env,
+          })();
+        },
       }),
     },
     // Keep value-level chamber-copilot imports out of ChamberCopilotService.ts;
@@ -604,7 +716,7 @@ const handleProtocolUrl = (rawUrl: string): void => {
     })
     .catch((error: unknown) => {
       log.warn('Protocol registry enrollment failed:', error);
-      showMarketplaceProtocolMessage('error', 'Unable to add marketplace', error instanceof Error ? error.message : String(error));
+      showMarketplaceProtocolMessage('error', 'Unable to add marketplace', getErrorMessage(error));
     });
 };
 
@@ -701,11 +813,19 @@ app.on('ready', async () => {
   // MindManager.doLoadMind calls getSessionTools BEFORE activateProviders;
   // without prewarm the first mind in a fresh process boots without the
   // cli_* tools. prewarm() swallows failures and logs.
+  //
+  // INVARIANT: Do NOT await prewarm here. The child Copilot CLI can hang
+  // during ACP handshake (observed in packaged macOS builds where the
+  // re-signed CLI exits 1 with no output), and awaiting would block
+  // createWindow() below — producing a no-window "black screen" boot.
+  // prewarm() is best-effort by design (swallows errors); the first mind
+  // load racing prewarm is the acceptable tradeoff for guaranteed UI.
   if (chamberCopilotService) {
-    await chamberCopilotService.prewarm();
+    void chamberCopilotService.prewarm();
   }
 
   // --- IPC adapters (thin, parameter-injected) ---
+  const skillDiscovery = new MindSkillDiscovery();
   setupChatIPC(chatService, mindManager);
   setupConversationHistoryIPC(chatService);
   setupMindIPC(mindManager, chatService, {
@@ -740,7 +860,13 @@ app.on('ready', async () => {
       return mindPath ? createTaskLedger(mindPath) : undefined;
     },
   });
-  setupAuthIPC(authService, mindManager);
+  setupSkillsIPC(
+    { getMindPath: (mindId) => mindManager.getMind(mindId)?.mindPath },
+    skillDiscovery,
+  );
+  setupAuthIPC(authService, mindManager, async () => {
+    await chamberCopilotService?.resetAuthState();
+  });
   setupByoLlmIPC(byoLlmStore, mindManager, {
     featureEnabled: appFeatureFlags.byoLlm,
     onConfigChanged: (config) => { cachedByoLlmConfig = appFeatureFlags.byoLlm ? config : null; },
@@ -854,6 +980,11 @@ app.on('before-quit', (e) => {
 app.on('will-quit', () => {
   appTray?.destroy();
   appTray = null;
+  closeTTasksStores();
+  if (automationBridgeStop) {
+    void automationBridgeStop().catch(() => { /* noop */ });
+    automationBridgeStop = null;
+  }
 });
 
 function createLensRefreshHandler(sendBackgroundPrompt: (mindPath: string, prompt: string) => Promise<void>) {

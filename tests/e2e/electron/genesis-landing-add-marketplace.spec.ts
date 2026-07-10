@@ -48,6 +48,7 @@ test.describe('electron Genesis landing Add Marketplace smoke', () => {
 
   test('adds the internal marketplace from first-run Genesis and refreshes template choices', async () => {
     const page = await findRendererPage(app?.browser, app?.logs ?? []);
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.waitForLoadState('domcontentloaded');
 
     await page.getByRole('button', { name: /New Agent/i }).click();
@@ -68,7 +69,10 @@ test.describe('electron Genesis landing Add Marketplace smoke', () => {
     await expect(page.getByRole('button', { name: /Lucy/i }).first()).toBeVisible({ timeout: 90_000 });
 
     const templates = await page.evaluate(async () => window.electronAPI.genesis.listTemplates());
-    expect(templates.filter((template) => template.id === 'lucy').map((template) => template.source.marketplaceId).sort()).toEqual([
+    expect(templates.filter((template) => template.id === 'lucy').map((template) => template.source.marketplaceId)).toEqual([
+      publicMarketplaceId,
+    ]);
+    expect([...new Set(templates.map((template) => template.source.marketplaceId))].sort()).toEqual([
       internalMarketplaceId,
       publicMarketplaceId,
     ]);

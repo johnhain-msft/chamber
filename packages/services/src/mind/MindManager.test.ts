@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as path from 'path';
 import { MindManager } from './MindManager';
 import { approveForSessionCompat } from '../sdk/approveForSessionCompat';
 import type { CopilotClientFactory } from '../sdk/CopilotClientFactory';
@@ -8,6 +9,7 @@ import type { ConfigService } from '../config/ConfigService';
 import type { ViewDiscovery } from '../lens/ViewDiscovery';
 import type { AppConfig, LensViewManifest } from '@chamber/shared/types';
 import { MindScaffold } from '../genesis/MindScaffold';
+import type { ManagedSkillSyncResult } from '../skills';
 
 // --- Mocks ---
 
@@ -37,7 +39,7 @@ function createSessionStub(sessionId = `sdk-session-${sessionCounter += 1}`) {
   sessionId,
   send: vi.fn(),
   sendAndWait: vi.fn(),
-  getMessages: vi.fn(async (): Promise<unknown[]> => []),
+  getEvents: vi.fn(async (): Promise<unknown[]> => []),
   on: vi.fn(),
   off: vi.fn(),
   disconnect: vi.fn(async () => undefined),
@@ -99,6 +101,7 @@ let currentConfig: AppConfig = {
 };
 
 const mockConfigService = {
+  getConfigDir: vi.fn(() => 'C:\\tmp\\chamber-config'),
   load: vi.fn(() => currentConfig),
   save: vi.fn((config) => {
     currentConfig = config;
@@ -113,6 +116,8 @@ const mockViewDiscovery = {
   removeMind: vi.fn(),
   setRefreshHandler: vi.fn(),
 };
+
+const COPILOT_RUNTIME_CONFIG_DIR = path.join('C:\\tmp\\chamber-config', 'copilot-runtime');
 
 function lastSavedConfig(): AppConfig {
   const config = mockConfigService.save.mock.calls.at(-1)?.[0] as AppConfig | undefined;
@@ -137,6 +142,8 @@ describe('MindManager', () => {
     mockProvider.releaseMind.mockImplementation(async () => { /* noop */ });
     mockConfigService.load.mockReset();
     mockConfigService.save.mockReset();
+    mockConfigService.getConfigDir.mockReset();
+    mockConfigService.getConfigDir.mockReturnValue('C:\\tmp\\chamber-config');
     mockConfigService.load.mockImplementation(() => currentConfig);
     mockConfigService.save.mockImplementation((config) => {
       currentConfig = config;
@@ -222,6 +229,15 @@ describe('MindManager', () => {
       });
     });
 
+    it('isolates SDK runtime config and disables implicit discovery for mind sessions', async () => {
+      await manager.loadMind('/tmp/agents/q');
+
+      expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+        configDir: COPILOT_RUNTIME_CONFIG_DIR,
+        enableConfigDiscovery: false,
+      }));
+    });
+
     it('resumes a persisted active conversation when restoring a mind', async () => {
       currentConfig = {
         version: 2,
@@ -246,7 +262,11 @@ describe('MindManager', () => {
 
       expect(mockResumeSession).toHaveBeenCalledWith(
         'chamber-q-a1b2-existing',
-        expect.objectContaining({ workingDirectory: '/tmp/agents/q' }),
+        expect.objectContaining({
+          workingDirectory: '/tmp/agents/q',
+          configDir: COPILOT_RUNTIME_CONFIG_DIR,
+          enableConfigDiscovery: false,
+        }),
       );
       expect(manager.listMinds()[0].activeSessionId).toBe('chamber-q-a1b2-existing');
     });
@@ -264,6 +284,41 @@ describe('MindManager', () => {
       expect(sentPrompt).toEqual(expect.stringContaining('<current_datetime>'));
       expect(sentPrompt).toEqual(expect.stringContaining('<timezone>'));
       expect(sentPrompt).toEqual(expect.stringContaining('do background work'));
+    });
+
+    it('runs automation prompts in an isolated session without touching the active conversation', async () => {
+      const mind = await manager.loadMind('/tmp/agents/q');
+      const activeSession = manager.getMind(mind.mindId)?.session as unknown as ReturnType<typeof createSessionStub>;
+      const activeSessionId = manager.getMind(mind.mindId)?.activeSessionId;
+      mockConfigService.save.mockClear();
+
+      const answer = 'isolated answer';
+      mockCreateSession.mockImplementationOnce((config: Record<string, unknown>) => {
+        const session = createSessionStub(typeof config.sessionId === 'string' ? config.sessionId : undefined);
+        session.sendAndWait.mockResolvedValueOnce({
+          type: 'assistant.message',
+          data: { content: answer, messageId: 'assistant-1' },
+        });
+        return session;
+      });
+
+      const result = await manager.runIsolatedPrompt(mind.mindId, 'summarize current state');
+
+      const isolatedSession = mockCreateSession.mock.results.at(-1)?.value;
+      expect(result).toBe(answer);
+      expect(isolatedSession).not.toBe(activeSession);
+      expect(isolatedSession.sendAndWait).toHaveBeenCalledWith(
+        { prompt: expect.stringContaining('summarize current state') },
+        120_000,
+      );
+      expect(isolatedSession.sendAndWait.mock.calls[0]?.[0].prompt).toEqual(expect.stringContaining('<current_datetime>'));
+      expect(isolatedSession.disconnect).toHaveBeenCalled();
+      expect(activeSession.send).not.toHaveBeenCalled();
+      expect(activeSession.sendAndWait).not.toHaveBeenCalled();
+      expect(activeSession.disconnect).not.toHaveBeenCalled();
+      expect(manager.getMind(mind.mindId)?.session).toBe(activeSession);
+      expect(manager.getMind(mind.mindId)?.activeSessionId).toBe(activeSessionId);
+      expect(mockConfigService.save).not.toHaveBeenCalled();
     });
 
     it('uses a persisted per-mind model when creating the session', async () => {
@@ -389,6 +444,27 @@ describe('MindManager', () => {
       expect(bootstrapMindCapabilities).toHaveBeenCalledWith('/tmp/agents/q');
       expect(mockClientFactory.createClient).toHaveBeenCalledWith('/tmp/agents/q');
       expect(vi.mocked(bootstrapMindCapabilities).mock.invocationCallOrder[0])
+        .toBeLessThan(mockClientFactory.createClient.mock.invocationCallOrder[0]);
+    });
+
+    it('installs marketplace managed skills before creating the SDK session', async () => {
+      const managedSkillService = {
+        installIntoMind: vi.fn(async (): Promise<ManagedSkillSyncResult> => ({ status: 'ok', installed: [], errors: [] })),
+      };
+      manager = new MindManager(
+        mockClientFactory as unknown as CopilotClientFactory,
+        mockIdentityLoader as unknown as IdentityLoader,
+        mockConfigService as unknown as ConfigService,
+        mockViewDiscovery as unknown as ViewDiscovery,
+        () => null,
+        () => undefined,
+        managedSkillService,
+      );
+
+      await manager.loadMind('/tmp/agents/q');
+
+      expect(managedSkillService.installIntoMind).toHaveBeenCalledWith('/tmp/agents/q');
+      expect(managedSkillService.installIntoMind.mock.invocationCallOrder[0])
         .toBeLessThan(mockClientFactory.createClient.mock.invocationCallOrder[0]);
     });
 
@@ -798,6 +874,7 @@ describe('MindManager', () => {
       manager.markActiveConversationHasMessages(mind.mindId, 'Hello Q');
       mockCreateSession.mockClear();
       mockResumeSession.mockRejectedValueOnce(new Error('failed to resume session: Session not found: stale-session'));
+      mockResumeSession.mockRejectedValueOnce(new Error('failed to resume session: Session not found: stale-legacy-session'));
       mockCreateSession.mockResolvedValueOnce(reattachedSession);
 
       const recovered = await manager.recoverActiveConversationSession(mind.mindId);
@@ -806,6 +883,10 @@ describe('MindManager', () => {
       expect(mockResumeSession).toHaveBeenCalledWith(
         mind.activeSessionId,
         expect.objectContaining({ workingDirectory: '/tmp/agents/q' }),
+      );
+      expect(mockResumeSession).toHaveBeenCalledWith(
+        mind.activeSessionId,
+        expect.not.objectContaining({ configDir: expect.any(String) }),
       );
       expect(mockCreateSession).toHaveBeenCalledWith(expect.objectContaining({
         sessionId: mind.activeSessionId,
@@ -825,6 +906,7 @@ describe('MindManager', () => {
       manager.markActiveConversationHasMessages(mind.mindId, 'Hello Q');
       mockCreateSession.mockClear();
       mockResumeSession.mockRejectedValueOnce(new Error('Session not found: stale-1'));
+      mockResumeSession.mockRejectedValueOnce(new Error('Session not found: stale-legacy'));
       mockCreateSession.mockRejectedValueOnce(new Error('Session not found: stale-2'));
 
       await expect(manager.recoverActiveConversationSession(mind.mindId)).rejects.toThrow(/Session not found/);
@@ -877,7 +959,7 @@ describe('MindManager', () => {
   describe('conversation history', () => {
     it('resumes a selected conversation and hydrates messages from the SDK session', async () => {
       const resumedSession = createSessionStub();
-      resumedSession.getMessages.mockResolvedValue([
+      resumedSession.getEvents.mockResolvedValue([
         {
           type: 'user.message',
           timestamp: '2026-05-05T22:00:00.000Z',
@@ -923,9 +1005,57 @@ describe('MindManager', () => {
       );
     });
 
+    it('falls back to the legacy default session-state root when Chamber runtime state is missing', async () => {
+      const legacySession = createSessionStub();
+      legacySession.getEvents.mockResolvedValue([
+        {
+          type: 'user.message',
+          timestamp: '2026-05-05T22:00:00.000Z',
+          data: { messageId: 'u1', content: 'legacy chat' },
+        },
+      ]);
+      const mind = await manager.loadMind('/tmp/agents/q');
+      manager.markActiveConversationHasMessages(mind.mindId, 'Existing chat');
+      await manager.startNewConversation(mind.mindId);
+      const target = manager.listConversationHistory(mind.mindId)[1];
+      mockResumeSession.mockClear();
+      mockResumeSession
+        .mockRejectedValueOnce(new Error('failed to resume session: Session not found: missing-runtime'))
+        .mockResolvedValueOnce(legacySession);
+
+      const result = await manager.resumeConversation(mind.mindId, target.sessionId);
+
+      expect(mockResumeSession).toHaveBeenCalledTimes(2);
+      expect(mockResumeSession).toHaveBeenNthCalledWith(
+        1,
+        target.sessionId,
+        expect.objectContaining({
+          configDir: COPILOT_RUNTIME_CONFIG_DIR,
+          enableConfigDiscovery: false,
+        }),
+      );
+      expect(mockResumeSession).toHaveBeenNthCalledWith(
+        2,
+        target.sessionId,
+        expect.not.objectContaining({ configDir: expect.any(String) }),
+      );
+      const legacyResumeConfig = mockResumeSession.mock.calls[1][1] as Record<string, unknown>;
+      expect(legacyResumeConfig.enableConfigDiscovery).toBe(false);
+      expect(result.sessionId).toBe(target.sessionId);
+      expect(result.messages).toEqual([
+        {
+          id: 'u1',
+          role: 'user',
+          blocks: [{ type: 'text', content: 'legacy chat' }],
+          timestamp: Date.parse('2026-05-05T22:00:00.000Z'),
+        },
+      ]);
+      expect(mockCreateSession).toHaveBeenCalledTimes(2);
+    });
+
     it('wires approveForSessionCompat on resumed sessions and does not short-circuit via setApproveAll (issue #131)', async () => {
       const resumedSession = createSessionStub();
-      resumedSession.getMessages.mockResolvedValue([]);
+      resumedSession.getEvents.mockResolvedValue([]);
       mockResumeSession.mockResolvedValueOnce(resumedSession);
       const mind = await manager.loadMind('/tmp/agents/q');
       manager.markActiveConversationHasMessages(mind.mindId, 'Prior chat');
@@ -941,7 +1071,7 @@ describe('MindManager', () => {
 
     it('hydrates the already-active conversation without resuming the SDK session again', async () => {
       const activeSession = createSessionStub();
-      activeSession.getMessages.mockResolvedValue([
+      activeSession.getEvents.mockResolvedValue([
         {
           type: 'user.message',
           timestamp: '2026-05-05T22:00:00.000Z',
@@ -993,7 +1123,7 @@ describe('MindManager', () => {
 
     it('deletes the active conversation and hydrates the next most recent conversation', async () => {
       const resumedSession = createSessionStub();
-      resumedSession.getMessages.mockResolvedValue([
+      resumedSession.getEvents.mockResolvedValue([
         {
           type: 'user.message',
           timestamp: '2026-05-05T22:00:00.000Z',
@@ -1047,7 +1177,7 @@ describe('MindManager', () => {
 
     it('strips Chamber-injected datetime context from hydrated user messages', async () => {
       const resumedSession = createSessionStub();
-      resumedSession.getMessages.mockResolvedValue([
+      resumedSession.getEvents.mockResolvedValue([
         {
           type: 'user.message',
           timestamp: '2026-05-05T22:00:00.000Z',
@@ -1433,6 +1563,37 @@ describe('MindManager', () => {
     });
   });
 
+  describe('managed skill discovery', () => {
+    it('passes the mind skill parent directory to createSession', async () => {
+      await manager.loadMind('/tmp/agents/q');
+
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skillDirectories: [path.join('/tmp/agents/q', '.github', 'skills')],
+        }),
+      );
+    });
+
+    it('passes the mind skill parent directory to resumeSession', async () => {
+      const resumedSession = createSessionStub();
+      resumedSession.getEvents.mockResolvedValue([]);
+      mockResumeSession.mockResolvedValueOnce(resumedSession);
+      const mind = await manager.loadMind('/tmp/agents/q');
+      manager.markActiveConversationHasMessages(mind.mindId, 'Prior chat');
+      await manager.recreateSession(mind.mindId);
+      const target = manager.listConversationHistory(mind.mindId)[1];
+
+      await manager.resumeConversation(mind.mindId, target.sessionId);
+
+      expect(mockResumeSession).toHaveBeenCalledWith(
+        target.sessionId,
+        expect.objectContaining({
+          skillDirectories: [path.join('/tmp/agents/q', '.github', 'skills')],
+        }),
+      );
+    });
+  });
+
   describe('chamber mind config (#131 — per-mind excludedTools)', () => {
     it('passes excludedTools through to createSession when .chamber.json declares them', async () => {
       const chamberJson = JSON.stringify({ excludedTools: ['shell', 'str_replace'] });
@@ -1485,7 +1646,7 @@ describe('MindManager', () => {
           : '# TestAgent\nSome content';
       });
       const resumedSession = createSessionStub();
-      resumedSession.getMessages.mockResolvedValue([]);
+      resumedSession.getEvents.mockResolvedValue([]);
       mockResumeSession.mockResolvedValueOnce(resumedSession);
       const mind = await manager.loadMind('/tmp/agents/q');
       manager.markActiveConversationHasMessages(mind.mindId, 'Prior chat');

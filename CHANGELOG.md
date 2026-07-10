@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Restore legacy conversation resume fallback** — Conversation resume now falls back from Chamber's current SDK session-state root to the legacy default Copilot session-state root before recreating a missing session, so pre-move chat history hydrates instead of opening empty.
+- **Refresh packaged Copilot runtime pin** — Aligns the committed @github/copilot runtime pin with the launcher-resolved 1.0.58 build so package smoke validates the bundled CLI.
+- **Stop Copilot CLI auth popups after sign-in** — Pass Chamber's stored GitHub OAuth token into SDK-created CLI clients and disable CLI auto-login so device-flow browser prompts only occur from Chamber's explicit sign-in flow.
+
+### Tests
+
+- **Add invariant test suite** — Introduces test:invariants for high-signal Chamber contracts covering session-state fallback order, stable conversation state roots, SDK config discovery, metadata-only history records, renderer/preload and shared architecture boundaries, managed skill/session ordering, approval redaction/default-deny behavior, credential-write boundaries, automation bridge/token safety, startup prewarm ordering, Electron window preferences, and cron script validation.
+- **Align marketplace E2E credential checks** — Makes marketplace test guards use the same stored GitHub credential filter as the runtime so inaccessible private registries skip cleanly instead of failing after launch. (#343)
+
+### Added
+
+- **Add chamber:a2a ttasks runtime support** — Adds a chamber:a2a custom task type, production A2A bridge wiring, durable ttasks persistence, and invariants for the runtime contract.
+- **Add theme-aware update chrome** — Adds a dismissible ready-to-install banner and update-status indicator with accessible light and dark theme colors.
+- **Expose bounded per-mind skill discovery** — Adds renderer-safe on-disk skill metadata IPC with asynchronous bounded reads, deterministic limits, and path/link safeguards without conflating managed provenance or integrity.
+
+### Refactor
+
+- **Establish shared renderer UI foundations** — Adds shared design tokens, light and dark palettes, Inter typography, reusable tabs and skeletons, and responsive, resizable, clipboard, delay, and theme hooks.
+
+### Changed
+
+- **Polish chat message rendering** — Improves streaming, scrolling, tool and reasoning groups, agent colors, copy actions, composer affordances, and welcome states.
+- **Refresh Settings navigation and layout** — Reorganizes Profile, Account, Marketplaces, and Local LLM settings into a clearer left-rail interface with updated panels and light-theme styling.
+- **Polish Lens view presentation** — Adds view descriptions, Lucide icons, loading skeletons, refined empty states, and improved detail-view readability.
+
+
+
+
+
+
+## [0.64.1] - 2026-06-01
+
+### Fixed
+
+- **Load marketplace-installed skills in SDK sessions** — Mind sessions now pass each mind's `.github/skills` parent directory through `skillDirectories` when creating or resuming Copilot SDK sessions, so the SDK `skill` tool can discover marketplace-installed skills like `ttasks` and `automation`.
+
+## [0.64.0] - 2026-06-01
+
+### Fixed
+
+- **Fix "CLI server exited unexpectedly with code 1" on packaged macOS builds** — The bundled `@github/copilot` CLI is a Node.js Single Executable Application. `electron-osx-sign` was re-signing it with default Electron entitlements (audio, bluetooth, camera, etc.) which lack `com.apple.security.cs.allow-unsigned-executable-memory` and `com.apple.security.cs.disable-library-validation`. Under hardened runtime, V8's JIT could not allocate executable memory and the kernel SIGKILLed the process immediately, producing no stdout/stderr. `scripts/sign-macos-prepackaged.js` now re-signs the SEA binary with a dedicated entitlements plist (`assets/entitlements.copilot-cli.mac.plist`) after the main `electron-osx-sign` pass.
+- **Fix black-screen launch on packaged macOS builds** — `app.on('ready')` no longer awaits `chamberCopilotService.prewarm()`. When the bundled Copilot CLI hangs during ACP handshake (observed in re-signed darwin-arm64 packages), awaiting prewarm blocked `createWindow()` and the app booted with no visible window. prewarm() is best-effort by design, so it now runs fire-and-forget.
+- **Fix silent `electron-forge package` exit on Node 24** — Added an npm override pinning `yauzl@^3.3.1`. The transitive `yauzl@2.10.0` used by `extract-zip` returns a readable stream that emits no events on Node 24, causing electron-packager's Electron template extraction to abandon mid-extract and the process to exit with no output and no `Chamber-darwin-arm64/` artifact.
 - **Surface ambiguous A2A recipients** — A2A message routing now reports duplicate display-name matches with usable recipient identifiers instead of falling through to an unknown-recipient error. (#322) (#322)
 - **Complete turns after root turn end** — Chat streaming now finishes after a guarded root assistant.turn_end quiescence path when the SDK omits session.idle, while still waiting for outstanding tools and sub-agent turns so late output is preserved. (#297) (#297)
 - **Prevent false chat completion and missed UI updates** — Chat cancellation now requires an active turn, A2A and cron streaming state no longer contaminates chat input, and renderer chat events replay after window refocus so hidden-window work can catch up. Fixes #297. (#297)
@@ -21,6 +64,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Add persistent task ledger** — Adds per-mind SQLite task ledger storage, cron/A2A/ACP audit rows, task IPC, maintenance sweeps, and native packaging support. Closes #356. (#356)
+
+### Changed
+
+- **Move Chamber-managed skills to the Genesis marketplace** — Lens, ttasks, and automation are now fetched from the default Genesis marketplace, materialized with deterministic framed hashes, and installed into minds through a cached managed-skill service instead of being bundled in the desktop installer.
+- **Replace four-job cron model with author-your-own ttasks scripts** — Cron jobs now have a single shape (`{name, schedule, scriptPath, enabled?, timeoutMs?}`). Minds author TypeScript files under `.chamber/automation/*.ts` as direct ttasks programs using `@ianphil/ttasks-ts`; `@chamber/automation-runtime` supplies Chamber bridge helpers/handlers for prompt/notify/http tasks. Cron schedules execute them via a bundled Node + tsx + typescript runtime under `resources/automation-runtime/`. Existing v1 cron files (`prompt|shell|webhook|notification`) are migrated in-place on first load with `cron.v1.backup.json` next to the source. New tools: `automation_run`, `automation_validate`, `cron_run_detail`. Loopback `AutomationBridge` provides per-spawn Bearer-token-scoped `/prompt` and `/notify` endpoints for scripts to call back into Chamber.
+- **Persist cron run history in ttasks** — Cron history now reads and writes run records through the per-mind ttasks store while keeping recurring job definitions in cron JSON for now. (#359)
+
+### Packaging
+
+- **Halve the installer by de-duplicating the bundled Copilot runtime** — The packaged `resources/copilot-runtime` shrank from 858 MB to 338 MB and the Windows installer from ~441 MB to ~271 MB (−38%). Two sources of waste were removed with zero behavior change: (1) a second, never-executed `@github/copilot` CLI copy that npm nested under `@github/copilot-sdk` because our prerelease pin doesn't satisfy the SDK's `^1.0.55-1` range — an npm `overrides` entry (`$@github/copilot`) in both `package.json` and `chamber-copilot-runtime/package.json` now dedupes to a single hoisted copy; and (2) foreign-platform prebuilt native addons (`@github/copilot/prebuilds/<triple>`) for all 8 platform triples — `scripts/prepare-copilot-runtime.js` now prunes every triple except the host (Linux keeps both glibc and musl). `validateRuntimeDir` enforces both invariants so a stale runtime is rebuilt rather than silently reused.
+- **Refresh packaged Copilot runtime** — Updated the pinned packaged Copilot CLI runtime to match the version required by package smoke.
+- **Fix packaged build on Windows** — prepare-automation-runtime.js spawned npm directly, which fails on Windows (ENOENT for npm, EINVAL for npm.cmd under Node 24); npm is now resolved to npm.cmd and routed through cmd.exe like the other runtime prep scripts, and spawn errors are surfaced instead of misreported as a failed install
+
+### CI
+
+- **Build macOS insiders artifacts** — The insiders release workflow now builds signed and notarized Apple Silicon macOS artifacts, publishes them to the insiders feed only after Windows and macOS both succeed, and leaves stable macOS releases behind the existing STABLE_RELEASE_BUILD_MACOS gate.
+
+
+
 
 
 

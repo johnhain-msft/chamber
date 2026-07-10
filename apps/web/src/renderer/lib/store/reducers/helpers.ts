@@ -41,6 +41,15 @@ export function conversationViewFor(state: AppState, mindId: string): Conversati
   return state.conversationViewByMind[mindId] ?? defaultConversationView();
 }
 
+export function isMindChatStreaming(
+  state: AppState,
+  mindId: string,
+  streamingByMind = state.streamingByMind,
+  conversationViewByMind = state.conversationViewByMind,
+): boolean {
+  return Boolean(streamingByMind[mindId] || conversationViewByMind[mindId]?.streaming);
+}
+
 export function setConversationView(
   state: AppState,
   mindId: string,
@@ -64,11 +73,18 @@ export function mergeConversationSummaries(
   return incoming.map((conversation) => {
     const current = existingById.get(conversation.sessionId);
     if (!current) return conversation;
+    if (isPlaceholderConversationTitle(current.title) && !isPlaceholderConversationTitle(conversation.title)) {
+      return conversation;
+    }
     const currentUpdatedAt = Date.parse(current.updatedAt);
     const incomingUpdatedAt = Date.parse(conversation.updatedAt);
     if (Number.isNaN(currentUpdatedAt) || Number.isNaN(incomingUpdatedAt)) return conversation;
     return currentUpdatedAt > incomingUpdatedAt ? current : conversation;
   });
+}
+
+function isPlaceholderConversationTitle(title: string): boolean {
+  return title === 'New chat' || title.startsWith('New chat · ');
 }
 
 export function getPlainContent(message: ChatMessage): string {

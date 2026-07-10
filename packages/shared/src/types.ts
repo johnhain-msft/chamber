@@ -1,4 +1,5 @@
 export type { A2AIncomingPayload } from './a2a-types';
+export type { SkillManifest } from './skill-types';
 
 // Shared types across main, preload, and renderer processes
 
@@ -44,7 +45,17 @@ export interface ImageBlock {
 // and `mapSdkPermissionCompleted`. The block status starts `pending`
 // when the request arrives and updates to one of the SDK's
 // `PermissionCompletedKind` values when the completion event fires.
-export type PermissionRequestKind = 'shell' | 'write' | 'mcp' | 'read' | 'url' | 'custom-tool' | 'memory' | 'hook';
+export type PermissionRequestKind =
+  | 'shell'
+  | 'write'
+  | 'mcp'
+  | 'read'
+  | 'url'
+  | 'custom-tool'
+  | 'memory'
+  | 'hook'
+  | 'extension-management'
+  | 'extension-permission-access';
 
 export type PermissionOutcome =
   | 'pending'
@@ -55,7 +66,8 @@ export type PermissionOutcome =
   | 'denied-no-approval-rule-and-could-not-request-from-user'
   | 'denied-interactively-by-user'
   | 'denied-by-content-exclusion-policy'
-  | 'denied-by-permission-request-hook';
+  | 'denied-by-permission-request-hook'
+  | 'cancelled';
 
 export interface PermissionBlock {
   type: 'permission';
@@ -408,6 +420,8 @@ export interface LensViewManifest {
   id: string;
   name: string;
   icon: string;
+  /** Optional one-line description shown in catalogs and the About panel. */
+  description?: string;
   view: 'form' | 'table' | 'briefing' | 'status-board' | 'list' | 'monitor' | 'detail' | 'timeline' | 'editor' | 'canvas';
   source: string;
   schema?: Record<string, unknown>;
